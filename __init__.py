@@ -251,9 +251,9 @@ def make_handoff_handler(ctx):
                     "in blocked status awaiting human review."
                 )
 
-            # Notify target department webhook if configured
+            # Notify the target department, unless the task already existed past blocked
             target_notify_url = target_info.get("notification_webhook")
-            if target_notify_url:
+            if target_notify_url and real_status == "blocked":
                 _send_notification(target_notify_url, {
                     "event": "handoff_created",
                     "task_id": task_id,
