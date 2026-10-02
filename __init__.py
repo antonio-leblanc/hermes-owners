@@ -1,5 +1,6 @@
-"""hermes-workforce: injects the company charter into each profile's turn."""
+"""hermes-workforce: injects company charter and provides departmental handoff tool."""
 
+import json
 import logging
 from pathlib import Path
 
@@ -30,9 +31,11 @@ def build_charter(fleet: dict, profile: str) -> str | None:
         lines.append("You own: " + "; ".join(dept["owns"]) + ". Handle these as usual, with your tools.")
     if dept.get("does_not_own"):
         lines.append("You do not own: " + "; ".join(dept["does_not_own"]) + ".")
-    if dept.get("escalates_to"):
+    escalates = dept.get("escalates_to")
+    if escalates:
+        escalates_str = ", ".join(escalates) if isinstance(escalates, list) else str(escalates)
         lines.append(
-            f"When a request is not yours, do not try to solve it: say it belongs to {dept['escalates_to']}. "
+            f"When a request is not yours, do not try to solve it: hand it off to {escalates_str} using the `handoff_task` tool. "
             "Only say you escalated or registered something if a tool call actually did it."
         )
 
@@ -40,6 +43,155 @@ def build_charter(fleet: dict, profile: str) -> str | None:
     if others:
         lines.append("Other departments:\n" + "\n".join(others))
     return "\n".join(lines)
+
+
+HANDOFF_TASK_SCHEMA = {
+    "name": "handoff_task",
+    "description": (
+        "Hand off a request or ticket that belongs to another department according to the company charter. "
+        "Opens a task on the Hermes Kanban in triage status for the destination department's "
+        "profile, carrying ticket and request details for triage."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "to_department": {
+                "type": "string",
+                "description": "Destination department name as defined in the company charter (e.g. 'tech'). Must match escalates_to.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Short, clear title for the handoff task.",
+            },
+            "context": {
+                "type": "string",
+                "description": "Detailed context: customer report, error logs, reproduction steps, or investigation notes.",
+            },
+            "ticket_id": {
+                "type": "string",
+                "description": "Optional external ticket ID or reference URL (e.g. '#1234', 'INC-992').",
+            },
+            "priority": {
+                "type": "integer",
+                "description": "Priority level: 0=normal (default), 1=high, 2=urgent.",
+                "default": 0,
+            },
+        },
+        "required": ["to_department", "title", "context"],
+        "additionalProperties": False,
+    },
+}
+
+
+def make_handoff_handler(ctx):
+    def handoff_task(args: dict, **kwargs) -> str:
+        fleet = _load_fleet()
+        if not fleet:
+            return json.dumps({"ok": False, "error": "No fleet.yaml found for workforce plugin."})
+
+        departments = fleet.get("departments") or {}
+        my_profile = ctx.profile_name
+        my_dept_name = next((k for k, d in departments.items() if d.get("profile") == my_profile), None)
+
+        if not my_dept_name:
+            return json.dumps({
+                "ok": False,
+                "error": f"Current profile '{my_profile}' is not assigned to any department in fleet.yaml.",
+            })
+
+        my_dept = departments[my_dept_name]
+        escalates = my_dept.get("escalates_to")
+        if not escalates:
+            return json.dumps({
+                "ok": False,
+                "error": f"Department '{my_dept_name}' has no escalates_to target defined.",
+            })
+
+        allowed_targets = [escalates] if isinstance(escalates, str) else list(escalates)
+        allowed_targets_lower = {t.lower(): t for t in allowed_targets}
+
+        to_dept_raw = (args.get("to_department") or "").strip()
+        to_dept_key = to_dept_raw.lower()
+
+        if to_dept_key not in allowed_targets_lower:
+            return json.dumps({
+                "ok": False,
+                "error": (
+                    f"Policy violation: department '{my_dept_name}' can only escalate to "
+                    f"{allowed_targets}, not '{to_dept_raw}'."
+                ),
+            })
+
+        canonical_target_dept = allowed_targets_lower[to_dept_key]
+        target_info = departments.get(canonical_target_dept)
+        if not target_info or not target_info.get("profile"):
+            return json.dumps({
+                "ok": False,
+                "error": f"Destination department '{canonical_target_dept}' has no profile defined in fleet.yaml.",
+            })
+
+        target_profile = target_info["profile"]
+        title = (args.get("title") or "").strip()
+        context = (args.get("context") or "").strip()
+        ticket_id = (args.get("ticket_id") or "").strip()
+        priority = args.get("priority", 0)
+
+        if not title:
+            return json.dumps({"ok": False, "error": "title is required"})
+        if not context:
+            return json.dumps({"ok": False, "error": "context is required"})
+
+        body_lines = [
+            f"**From Department:** {my_dept_name} (profile: `{my_profile}`)",
+            f"**To Department:** {canonical_target_dept} (profile: `{target_profile}`)",
+        ]
+        if ticket_id:
+            body_lines.append(f"**Ticket Ref:** `{ticket_id}`")
+        body_lines.append(f"\n### Context & Details\n{context}")
+        body = "\n".join(body_lines)
+
+        dispatch_args = {
+            "title": title,
+            "body": body,
+            "assignee": target_profile,
+            "triage": True,
+        }
+        if priority:
+            dispatch_args["priority"] = priority
+
+        try:
+            res = ctx.dispatch_tool("kanban_create", dispatch_args)
+            if isinstance(res, str):
+                try:
+                    data = json.loads(res)
+                except Exception:
+                    data = {"raw_output": res}
+            elif isinstance(res, dict):
+                data = res
+            else:
+                data = {"raw_output": str(res)}
+
+            if isinstance(data, dict) and data.get("error"):
+                return json.dumps({"ok": False, "error": data["error"]})
+
+            task_id = data.get("task_id") if isinstance(data, dict) else None
+
+            return json.dumps({
+                "ok": True,
+                "task_id": task_id,
+                "to_department": canonical_target_dept,
+                "assignee": target_profile,
+                "status": "triage",
+                "message": (
+                    f"Successfully created triage task {task_id or ''} on Kanban for "
+                    f"department '{canonical_target_dept}' (assignee: '{target_profile}')."
+                ),
+            })
+        except Exception as e:
+            logger.exception("Failed to dispatch kanban_create in workforce handoff")
+            return json.dumps({"ok": False, "error": f"Failed to dispatch kanban task: {e}"})
+
+    return handoff_task
 
 
 def register(ctx):
@@ -56,3 +208,11 @@ def register(ctx):
         return {"context": "[Company charter]\n" + charter}
 
     ctx.register_hook("pre_llm_call", inject_charter)
+    ctx.register_tool(
+        name="handoff_task",
+        toolset="workforce",
+        schema=HANDOFF_TASK_SCHEMA,
+        handler=make_handoff_handler(ctx),
+        description=HANDOFF_TASK_SCHEMA["description"],
+        emoji="📋",
+    )

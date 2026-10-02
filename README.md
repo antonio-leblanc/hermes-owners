@@ -1,6 +1,6 @@
 # hermes-workforce
 
-> Status: in progress. Not usable yet.
+> Status: in active development. Charter injection and Kanban triage handoff are functional.
 
 A [Hermes](https://github.com/NousResearch/hermes-agent) plugin where each department of a company gets an agent that knows what it owns. Talk to any of them: if the request isn't theirs, they hand it to the owner, with a trail and a human approving.
 
