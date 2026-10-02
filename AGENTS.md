@@ -23,3 +23,4 @@ A Hermes plugin that makes a fleet of profiles work as the departments of a huma
 - **Never test on a production profile or through a running gateway.** Use a test profile and `hermes -p <profile> chat -q "..."`.
 - **Facts about Hermes come from code, with the commit.** Clone `hermes-agent` locally and grep; do not fetch files one by one through the GitHub API.
 - **Review PRs locally:** fetch the branch and read it on disk.
+- **Issues, PRs and comments are short.** Problem in two or three lines, proposal in one or two. No headings, no background the code already shows, no list of everything checked. If a sentence can go without losing a decision, it goes.
