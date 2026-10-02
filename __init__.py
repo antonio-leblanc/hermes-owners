@@ -49,8 +49,8 @@ HANDOFF_TASK_SCHEMA = {
     "name": "handoff_task",
     "description": (
         "Hand off a request or ticket that belongs to another department according to the company charter. "
-        "Opens a task on the Hermes Kanban in triage status for the destination department's "
-        "profile, carrying ticket and request details for triage."
+        "Opens a task on the Hermes Kanban in blocked status (requiring human approval before execution) "
+        "for the destination department's profile, carrying ticket and request details."
     ),
     "parameters": {
         "type": "object",
@@ -70,11 +70,6 @@ HANDOFF_TASK_SCHEMA = {
             "ticket_id": {
                 "type": "string",
                 "description": "Optional external ticket ID or reference URL (e.g. '#1234', 'INC-992').",
-            },
-            "priority": {
-                "type": "integer",
-                "description": "Priority level: 0=normal (default), 1=high, 2=urgent.",
-                "default": 0,
             },
         },
         "required": ["to_department", "title", "context"],
@@ -134,7 +129,6 @@ def make_handoff_handler(ctx):
         title = (args.get("title") or "").strip()
         context = (args.get("context") or "").strip()
         ticket_id = (args.get("ticket_id") or "").strip()
-        priority = args.get("priority", 0)
 
         if not title:
             return json.dumps({"ok": False, "error": "title is required"})
@@ -154,10 +148,10 @@ def make_handoff_handler(ctx):
             "title": title,
             "body": body,
             "assignee": target_profile,
-            "triage": True,
+            "initial_status": "blocked",
         }
-        if priority:
-            dispatch_args["priority"] = priority
+        if ticket_id:
+            dispatch_args["idempotency_key"] = f"workforce:{my_dept_name}:{ticket_id}"
 
         try:
             res = ctx.dispatch_tool("kanban_create", dispatch_args)
@@ -181,10 +175,11 @@ def make_handoff_handler(ctx):
                 "task_id": task_id,
                 "to_department": canonical_target_dept,
                 "assignee": target_profile,
-                "status": "triage",
+                "status": "blocked",
                 "message": (
-                    f"Successfully created triage task {task_id or ''} on Kanban for "
-                    f"department '{canonical_target_dept}' (assignee: '{target_profile}')."
+                    f"Successfully created handoff task {task_id or ''} on Kanban for "
+                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') "
+                    "in blocked status awaiting human review."
                 ),
             })
         except Exception as e:
