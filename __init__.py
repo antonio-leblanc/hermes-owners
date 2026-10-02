@@ -1,21 +1,54 @@
-"""hermes-workforce: injects company charter and provides departmental handoff tool."""
+"""hermes-workforce: injects company charter, provides departmental handoff, and closes the resolution loop."""
 
 import json
 import logging
+import sqlite3
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 from ruamel.yaml import YAML
 
 logger = logging.getLogger(__name__)
 
-FLEET_PATH = Path(__file__).parent / "fleet.yaml"
+# Cache for dynamic reloading of fleet.yaml
+_FLEET_CACHE: dict = {}
+_LAST_MTIME: float = 0.0
+_LAST_PATH: Path | None = None
 
 
-def _load_fleet() -> dict:
-    """Read fleet.yaml next to the plugin. Never falls back to the example charter."""
-    if not FLEET_PATH.exists():
+def get_fleet_path() -> Path | None:
+    """Resolve fleet.yaml: user home first (~/.hermes/fleet.yaml), then plugin directory."""
+    home_fleet = Path.home() / ".hermes" / "fleet.yaml"
+    if home_fleet.exists():
+        return home_fleet
+    local_fleet = Path(__file__).parent / "fleet.yaml"
+    if local_fleet.exists():
+        return local_fleet
+    return None
+
+
+def load_fleet(force_reload: bool = False) -> dict:
+    """Read fleet.yaml with mtime-based dynamic reload. Never falls back to example charter."""
+    global _FLEET_CACHE, _LAST_MTIME, _LAST_PATH
+    fleet_path = get_fleet_path()
+    if not fleet_path or not fleet_path.exists():
+        _FLEET_CACHE = {}
+        _LAST_MTIME = 0.0
+        _LAST_PATH = None
         return {}
-    return YAML(typ="safe").load(FLEET_PATH.read_text(encoding="utf-8")) or {}
+
+    try:
+        mtime = fleet_path.stat().st_mtime
+        if force_reload or mtime != _LAST_MTIME or fleet_path != _LAST_PATH:
+            _FLEET_CACHE = YAML(typ="safe").load(fleet_path.read_text(encoding="utf-8")) or {}
+            _LAST_MTIME = mtime
+            _LAST_PATH = fleet_path
+    except Exception as e:
+        logger.warning("workforce: failed to load fleet at %s: %s", fleet_path, e)
+    return _FLEET_CACHE
 
 
 def build_charter(fleet: dict, profile: str) -> str | None:
@@ -43,6 +76,56 @@ def build_charter(fleet: dict, profile: str) -> str | None:
     if others:
         lines.append("Other departments:\n" + "\n".join(others))
     return "\n".join(lines)
+
+
+def _send_notification(webhook_url: str, payload: dict) -> bool:
+    """Send an outbound JSON notification to a department webhook without blocking or raising."""
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            webhook_url,
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": "hermes-workforce/0.1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            return 200 <= resp.status < 300
+    except Exception as e:
+        logger.debug("workforce: notification webhook failed for %s: %s", webhook_url, e)
+        return False
+
+
+def _append_resolution_log(record: dict) -> None:
+    """Store audit receipt of handoff resolution in ~/.hermes/workforce/resolutions.jsonl."""
+    try:
+        log_dir = Path.home() / ".hermes" / "workforce"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "resolutions.jsonl"
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.warning("workforce: failed to write resolution log: %s", e)
+
+
+def parse_handoff_body(body: str | None) -> dict:
+    """Extract structured handoff metadata from kanban task body."""
+    meta: dict[str, str] = {}
+    if not body:
+        return meta
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("**From Department:**"):
+            parts = line.replace("**From Department:**", "").strip()
+            dept = parts.split("(")[0].strip()
+            meta["from_department"] = dept
+        elif line.startswith("**To Department:**"):
+            parts = line.replace("**To Department:**", "").strip()
+            dept = parts.split("(")[0].strip()
+            meta["to_department"] = dept
+        elif line.startswith("**Ticket Ref:**"):
+            ref = line.replace("**Ticket Ref:**", "").strip().strip("`")
+            meta["ticket_id"] = ref
+    return meta
 
 
 HANDOFF_TASK_SCHEMA = {
@@ -80,7 +163,7 @@ HANDOFF_TASK_SCHEMA = {
 
 def make_handoff_handler(ctx):
     def handoff_task(args: dict, **kwargs) -> str:
-        fleet = _load_fleet()
+        fleet = load_fleet()
         if not fleet:
             return json.dumps({"ok": False, "error": "No fleet.yaml found for workforce plugin."})
 
@@ -183,6 +266,20 @@ def make_handoff_handler(ctx):
                     "in blocked status awaiting human review."
                 )
 
+            # Notify target department webhook if configured
+            target_notify_url = target_info.get("notification_webhook") or target_info.get("notify_url")
+            if target_notify_url:
+                _send_notification(target_notify_url, {
+                    "event": "handoff_created",
+                    "task_id": task_id,
+                    "title": title,
+                    "ticket_id": ticket_id,
+                    "from_department": my_dept_name,
+                    "to_department": canonical_target_dept,
+                    "assignee": target_profile,
+                    "status": real_status,
+                })
+
             return json.dumps({
                 "ok": True,
                 "task_id": task_id,
@@ -198,20 +295,99 @@ def make_handoff_handler(ctx):
     return handoff_task
 
 
+def make_task_completed_handler(ctx):
+    """Lifecycle hook observer for kanban_task_completed to close the departmental loop."""
+    def on_kanban_task_completed(
+        task_id: str,
+        board: str = "default",
+        assignee: str | None = None,
+        run_id: int | None = None,
+        profile_name: str | None = None,
+        summary: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        db_path = Path.home() / ".hermes" / "kanban.db"
+        if not db_path.exists():
+            return
+
+        body = None
+        title = None
+        result = None
+        db_assignee = None
+
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT title, body, assignee, result FROM tasks WHERE id = ?",
+                    (task_id,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    title, body, db_assignee, result = row
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug("workforce: error reading task %s from kanban.db: %s", task_id, e)
+            return
+
+        meta = parse_handoff_body(body)
+        from_dept = meta.get("from_department")
+        if not from_dept:
+            return  # Not a workforce handoff task
+
+        effective_summary = summary or result or "Task resolved"
+        effective_assignee = assignee or db_assignee or profile_name
+
+        record = {
+            "timestamp": time.time(),
+            "task_id": task_id,
+            "title": title,
+            "ticket_id": meta.get("ticket_id"),
+            "from_department": from_dept,
+            "to_department": meta.get("to_department"),
+            "assignee": effective_assignee,
+            "summary": effective_summary,
+        }
+        _append_resolution_log(record)
+        logger.info(
+            "workforce: closed loop completed for task %s (ticket %s) from %s -> %s",
+            task_id,
+            meta.get("ticket_id"),
+            from_dept,
+            meta.get("to_department"),
+        )
+
+        fleet = load_fleet()
+        dept_info = (fleet.get("departments") or {}).get(from_dept) or {}
+        origin_notify_url = dept_info.get("notification_webhook") or dept_info.get("notify_url")
+        if origin_notify_url:
+            _send_notification(origin_notify_url, {
+                "event": "handoff_completed",
+                **record,
+            })
+
+    return on_kanban_task_completed
+
+
 def register(ctx):
-    fleet = _load_fleet()
+    fleet = load_fleet()
+    fleet_path = get_fleet_path()
     if not fleet:
-        logger.warning("workforce: no fleet.yaml at %s, nothing to inject", FLEET_PATH)
-    charter = build_charter(fleet, ctx.profile_name)
-    if fleet and charter is None:
-        logger.info("workforce: profile %s is not in the charter, nothing to inject", ctx.profile_name)
+        logger.warning("workforce: no fleet.yaml at %s or ~/.hermes/fleet.yaml, nothing to inject", fleet_path)
 
     def inject_charter(**kwargs):
+        current_fleet = load_fleet()
+        if not current_fleet:
+            return None
+        charter = build_charter(current_fleet, ctx.profile_name)
         if charter is None:
             return None
         return {"context": "[Company charter]\n" + charter}
 
     ctx.register_hook("pre_llm_call", inject_charter)
+    ctx.register_hook("kanban_task_completed", make_task_completed_handler(ctx))
     ctx.register_tool(
         name="handoff_task",
         toolset="workforce",

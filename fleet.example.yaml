@@ -4,6 +4,7 @@ company: Acme Solar
 departments:
   support:
     profile: support
+    notification_webhook: "https://support.example.com/webhooks/hermes-workforce"
     owns:
       - Product usage questions
       - Customer ticket status
@@ -13,6 +14,7 @@ departments:
 
   tech:
     profile: dev
+    notification_webhook: "https://chat.example.com/webhooks/incoming-tech-lead"
     owns:
       - Bugs, incidents and infrastructure failures
       - Pull requests and code review

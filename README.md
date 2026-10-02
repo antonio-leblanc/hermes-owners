@@ -16,8 +16,9 @@ A department can use another department's tools to finish its own work: tech clo
 
 ## Scope
 
-1. **Company charter:** a `fleet.yaml` defines departments, what each one owns and does not own, and where it escalates. It is injected into each profile's turn through the `pre_llm_call` hook.
-2. **Handoff:** a tool that opens a kanban task for the department in `escalates_to`, carrying the source reference (a ticket ID, for example), for a human there to approve or take.
+1. **Company charter:** a `fleet.yaml` (under `~/.hermes/fleet.yaml` or plugin root) defines departments, what each one owns and does not own, and where it escalates. It is injected into each profile's turn through the `pre_llm_call` hook with mtime dynamic reload (no gateway restart required).
+2. **Handoff:** a tool that opens a kanban task for the department in `escalates_to`, carrying the source reference (a ticket ID, for example), in blocked status for human approval.
+3. **Closed-loop resolution:** when a handoff task finishes on Kanban, the `kanban_task_completed` lifecycle hook captures the resolution summary, writes the durable audit log, and notifies the originating department.
 
 Later: a dashboard with the live org chart and per-department adoption by real people, as proof that the structure serves them.
 
