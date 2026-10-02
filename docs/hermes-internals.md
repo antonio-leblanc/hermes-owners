@@ -100,12 +100,6 @@ O ponto de extensão principal onde o plugin atua dentro do ciclo de execução 
 * **Registro:** `ctx.register_hook("pre_llm_call", callback)` ([`hermes_cli/plugins.py:976`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L976)).
 * **Comportamento ([docs/features/hooks.md](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/website/docs/user-guide/features/hooks.md#pre_llm_call)):** O callback recebe `(session_id, user_message, conversation_history, ...)` e pode retornar uma string ou `{"context": "..."}`.
 * **Mecânica de injeção:** O texto retornado é concatenado e anexado à **mensagem de usuário do turno atual** (`current turn's user message`), preservando o prompt de sistema byte-estável para cache de prefixo de LLM. É por este hook que a carta do departamento (`fleet.yaml`: responsabilidades, limites e regras de escalação) entra no contexto do agente a cada turno.
-* **Resolução Dinâmica e Hot-Reload:** O plugin resolve `~/.hermes/fleet.yaml` prioritariamente sobre o arquivo local e inspeciona o `st_mtime` a cada turno. Alterações na carta corporativa surtem efeito imediato sem necessidade de restart do Gateway.
-
-### Observador de Resolução de Tarefa (`kanban_task_completed`)
-* **Registro:** `ctx.register_hook("kanban_task_completed", callback)` ([`hermes_cli/plugins.py:162`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L162)).
-* **Comportamento ([docs/features/hooks.md](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/website/docs/user-guide/features/hooks.md#kanban_task_completed)):** Disparado pelo processo worker no momento em que uma tarefa conclui (`status = 'done'`). O hook recebe `(task_id, profile_name, board, assignee, run_id, summary)`.
-* **Fechamento de Ciclo:** Permite inspecionar o `kanban.db` em modo somente-leitura, identificar se a tarefa é um handoff interdepartamental (`**From Department:**` no body), persistir o log de auditoria em `~/.hermes/workforce/resolutions.jsonl` e disparar notificações de retorno para o canal/webhook do departamento de origem.
 
 ### Registro de Ferramentas (`register_tool`)
 * **Registro:** `ctx.register_tool(name, toolset, schema, handler, ...)` ([`hermes_cli/plugins.py:457`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L457)).

@@ -2,9 +2,6 @@
 
 import json
 import logging
-import sqlite3
-import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -30,7 +27,7 @@ def get_fleet_path() -> Path | None:
     return None
 
 
-def load_fleet(force_reload: bool = False) -> dict:
+def load_fleet() -> dict:
     """Read fleet.yaml with mtime-based dynamic reload. Never falls back to example charter."""
     global _FLEET_CACHE, _LAST_MTIME, _LAST_PATH
     fleet_path = get_fleet_path()
@@ -42,7 +39,7 @@ def load_fleet(force_reload: bool = False) -> dict:
 
     try:
         mtime = fleet_path.stat().st_mtime
-        if force_reload or mtime != _LAST_MTIME or fleet_path != _LAST_PATH:
+        if mtime != _LAST_MTIME or fleet_path != _LAST_PATH:
             _FLEET_CACHE = YAML(typ="safe").load(fleet_path.read_text(encoding="utf-8")) or {}
             _LAST_MTIME = mtime
             _LAST_PATH = fleet_path
@@ -91,20 +88,8 @@ def _send_notification(webhook_url: str, payload: dict) -> bool:
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             return 200 <= resp.status < 300
     except Exception as e:
-        logger.debug("workforce: notification webhook failed for %s: %s", webhook_url, e)
+        logger.warning("workforce: notification webhook failed for %s: %s", webhook_url, e)
         return False
-
-
-def _append_resolution_log(record: dict) -> None:
-    """Store audit receipt of handoff resolution in ~/.hermes/workforce/resolutions.jsonl."""
-    try:
-        log_dir = Path.home() / ".hermes" / "workforce"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "resolutions.jsonl"
-        with log_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception as e:
-        logger.warning("workforce: failed to write resolution log: %s", e)
 
 
 def parse_handoff_body(body: str | None) -> dict:
@@ -267,7 +252,7 @@ def make_handoff_handler(ctx):
                 )
 
             # Notify target department webhook if configured
-            target_notify_url = target_info.get("notification_webhook") or target_info.get("notify_url")
+            target_notify_url = target_info.get("notification_webhook")
             if target_notify_url:
                 _send_notification(target_notify_url, {
                     "event": "handoff_created",
@@ -296,76 +281,35 @@ def make_handoff_handler(ctx):
 
 
 def make_task_completed_handler(ctx):
-    """Lifecycle hook observer for kanban_task_completed to close the departmental loop."""
-    def on_kanban_task_completed(
-        task_id: str,
-        board: str = "default",
-        assignee: str | None = None,
-        run_id: int | None = None,
-        profile_name: str | None = None,
-        summary: str | None = None,
-        **kwargs: Any,
-    ) -> None:
-        db_path = Path.home() / ".hermes" / "kanban.db"
-        if not db_path.exists():
-            return
-
-        body = None
-        title = None
-        result = None
-        db_assignee = None
-
+    """Observer for kanban_task_completed: tell the origin department its handoff is done."""
+    def on_kanban_task_completed(task_id: str, summary: str | None = None, **kwargs: Any) -> None:
+        # kanban_show resolves the board the same way the worker does (HERMES_KANBAN_DB, current board).
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT title, body, assignee, result FROM tasks WHERE id = ?",
-                    (task_id,),
-                )
-                row = cursor.fetchone()
-                if row:
-                    title, body, db_assignee, result = row
-            finally:
-                conn.close()
+            data = json.loads(ctx.dispatch_tool("kanban_show", {"task_id": task_id}))
         except Exception as e:
-            logger.debug("workforce: error reading task %s from kanban.db: %s", task_id, e)
+            logger.warning("workforce: could not read task %s: %s", task_id, e)
             return
-
-        meta = parse_handoff_body(body)
+        task = data.get("task") or {}
+        meta = parse_handoff_body(task.get("body"))
         from_dept = meta.get("from_department")
         if not from_dept:
             return  # Not a workforce handoff task
 
-        effective_summary = summary or result or "Task resolved"
-        effective_assignee = assignee or db_assignee or profile_name
+        logger.info("workforce: handoff %s (ticket %s) done, %s -> %s",
+                    task_id, meta.get("ticket_id"), from_dept, meta.get("to_department"))
 
-        record = {
-            "timestamp": time.time(),
-            "task_id": task_id,
-            "title": title,
-            "ticket_id": meta.get("ticket_id"),
-            "from_department": from_dept,
-            "to_department": meta.get("to_department"),
-            "assignee": effective_assignee,
-            "summary": effective_summary,
-        }
-        _append_resolution_log(record)
-        logger.info(
-            "workforce: closed loop completed for task %s (ticket %s) from %s -> %s",
-            task_id,
-            meta.get("ticket_id"),
-            from_dept,
-            meta.get("to_department"),
-        )
-
-        fleet = load_fleet()
-        dept_info = (fleet.get("departments") or {}).get(from_dept) or {}
-        origin_notify_url = dept_info.get("notification_webhook") or dept_info.get("notify_url")
+        dept_info = (load_fleet().get("departments") or {}).get(from_dept) or {}
+        origin_notify_url = dept_info.get("notification_webhook")
         if origin_notify_url:
             _send_notification(origin_notify_url, {
                 "event": "handoff_completed",
-                **record,
+                "task_id": task_id,
+                "title": task.get("title"),
+                "ticket_id": meta.get("ticket_id"),
+                "from_department": from_dept,
+                "to_department": meta.get("to_department"),
+                "assignee": task.get("assignee"),
+                "summary": summary or task.get("result"),
             })
 
     return on_kanban_task_completed
