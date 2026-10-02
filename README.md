@@ -2,11 +2,17 @@
 
 > Status: in progress. Not usable yet.
 
-A [Hermes](https://github.com/NousResearch/hermes-agent) plugin that makes each profile in a fleet act as one department of a human company. A department knows what is its own. When a request is not, it hands it off for real: a task on Hermes' native kanban, with a trail of who asked and where it stands, and a human on the receiving side approving before anything runs. No second orchestrator beside Hermes.
+A [Hermes](https://github.com/NousResearch/hermes-agent) plugin where each department of a company gets an agent that knows what it owns. Talk to any of them: if the request isn't theirs, they hand it to the owner, with a trail and a human approving.
+
+People should not need to know which bot handles what. The bots should. Handoff is a task on Hermes' native kanban, with a trail of who asked and where it stands. No second orchestrator beside Hermes.
 
 ## Why
 
 Telling a bot what is not its job is half the problem. Without a way to pass the request on, it either tries to solve it anyway or says it escalated when nothing happened. Boundaries and handoff only work together.
+
+## Ownership follows the problem, tools follow the work
+
+A department can use another department's tools to finish its own work: tech closes the support ticket for the bug it just fixed. When the problem itself belongs to another department, it hands off instead. `owns` in the charter is responsibility, not access.
 
 ## Scope
 
