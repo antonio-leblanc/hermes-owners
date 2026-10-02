@@ -7,38 +7,19 @@ Caderno de estudo: como o Hermes funciona debaixo dos panos, na medida do que o 
 
 ---
 
-## 1. Sistema de Plugins do Agente (`hermes_cli/plugins.py`)
+## 1. Perfil
 
-O ponto de extensão principal onde o plugin atua dentro do ciclo de execução do agente.
+Instância lógica isolada com configuração, credenciais, banco de dados e diretório próprios.
 
-* **Arquivo central:** [`hermes_cli/plugins.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py)
-* **Ponto de entrada:** Diretório `~/.hermes/plugins/<id>/` contendo `plugin.yaml` e um `__init__.py` exportando a função `register(ctx: PluginContext)`.
-* **Hooks válidos (`VALID_HOOKS`, linhas 109-175):** Conjunto estrito de eventos interceptáveis pelo runtime (ex: `pre_llm_call`, `post_llm_call`, `pre_tool_call`, `post_tool_call`, `on_session_start`, `on_session_end`, `kanban_task_claimed`, `kanban_task_completed`).
-* **Hooks que alteram o fluxo pelo retorno:** `pre_llm_call` (injeta contexto), `pre_gateway_dispatch` (pula ou reescreve a mensagem antes do agente), `pre_tool_call` (bloqueia a chamada), `transform_tool_result`, `transform_terminal_output`, `transform_llm_output` e `pre_verify`. Os demais só observam.
-
-### Injeção de Contexto da Carta (`pre_llm_call`)
-* **Registro:** `ctx.register_hook("pre_llm_call", callback)` ([`hermes_cli/plugins.py:976`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L976)).
-* **Comportamento ([docs/features/hooks.md](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/website/docs/user-guide/features/hooks.md#pre_llm_call)):** O callback recebe `(session_id, user_message, conversation_history, ...)` e pode retornar uma string ou `{"context": "..."}`.
-* **Mecânica de injeção:** O texto retornado é concatenado e anexado à **mensagem de usuário do turno atual** (`current turn's user message`), preservando o prompt de sistema byte-estável para cache de prefixo de LLM. É por este hook que a carta do departamento (`fleet.yaml`: responsabilidades, limites e regras de escalação) entra no contexto do agente a cada turno.
-
-### Registro de Ferramentas (`register_tool`)
-* **Registro:** `ctx.register_tool(name, toolset, schema, handler, ...)` ([`hermes_cli/plugins.py:457`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L457)).
-* Permite registrar ferramentas de modelo dinâmicas diretamente no registro global sem alterar o core do Hermes. Ponto de entrada para ferramentas como a delegação interdepartamental (abrir tarefa para outro departamento validando contra `escalates_to`).
-
-### Injeção Ativa de Mensagens (`inject_message`)
-* **Chamada:** `ctx.inject_message(content, role="user", session_key=...)` ([`hermes_cli/plugins.py:604`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L604)).
-* Envia uma mensagem para a fila de execução de uma sessão ativa do CLI, Desktop ou Gateway.
-* **Requisito de segurança:** Para injeção no Gateway, requer que o operador habilite explicitamente no `config.yaml`:
-  ```yaml
-  plugins:
-    entries:
-      <plugin_id>:
-        allow_gateway_injection: true
-  ```
-
-### Como um perfil cria tarefas no Kanban hoje
-1. **Via Model Tool (`kanban_create`):** Ferramenta nativa do toolset `kanban` (handler em [`tools/kanban_tools.py:1053`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/tools/kanban_tools.py#L1053) e schema em [`tools/kanban_tools_schemas.py:389`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/tools/kanban_tools_schemas.py#L389)). Requer o toolset `kanban` habilitado no perfil.
-2. **Via CLI no Terminal:** Execução via ferramenta `terminal` do comando `hermes kanban create --title "..." --body "..." --assignee <perfil> [--board <board>]`.
+* **Localização no disco:**
+  * Perfil padrão: `~/.hermes/`
+  * Perfis secundários: `~/.hermes/profiles/<nome>/`
+* **Resolução de Caminhos e Identidade:**
+  * [`hermes_constants.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_constants.py): `get_hermes_home()` resolve o diretório do perfil ativo; `named_profile_has_identity()` verifica presença de `config.yaml`, `SOUL.md`, `.env` ou `state.db`.
+  * [`hermes_cli/profiles.py:profiles_to_serve()`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/profiles.py): Enumera os perfis ativos servidos pelo gateway.
+* **Isolamento de Escopo:**
+  * [`gateway/run.py:_profile_runtime_scope`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/gateway/run.py): Vincula o escopo do perfil ativo durante turnos e callbacks.
+  * [`agent/secret_scope.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/agent/secret_scope.py): Sob multiplexação, leituras fora de escopo levantam `UnscopedSecretError`, impedindo vazamento de segredos entre perfis.
 
 ---
 
@@ -58,23 +39,7 @@ O processo supervisor de mensageria e ciclo de vida do agente.
 
 ---
 
-## 3. Perfil
-
-Instância lógica isolada com configuração, credenciais, banco de dados e diretório próprios.
-
-* **Localização no disco:**
-  * Perfil padrão: `~/.hermes/`
-  * Perfis secundários: `~/.hermes/profiles/<nome>/`
-* **Resolução de Caminhos e Identidade:**
-  * [`hermes_constants.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_constants.py): `get_hermes_home()` resolve o diretório do perfil ativo; `named_profile_has_identity()` verifica presença de `config.yaml`, `SOUL.md`, `.env` ou `state.db`.
-  * [`hermes_cli/profiles.py:profiles_to_serve()`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/profiles.py): Enumera os perfis ativos servidos pelo gateway.
-* **Isolamento de Escopo:**
-  * [`gateway/run.py:_profile_runtime_scope`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/gateway/run.py): Vincula o escopo do perfil ativo durante turnos e callbacks.
-  * [`agent/secret_scope.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/agent/secret_scope.py): Sob multiplexação, leituras fora de escopo levantam `UnscopedSecretError`, impedindo vazamento de segredos entre perfis.
-
----
-
-## 4. `state.db`
+## 3. `state.db`
 
 Banco SQLite local de cada perfil (`<profile_home>/state.db`), operando em modo WAL.
 
@@ -122,6 +87,37 @@ WHERE m.role = 'user'
 
 ---
 
+## 4. Sistema de Plugins do Agente (`hermes_cli/plugins.py`)
+
+O ponto de extensão principal onde o plugin atua dentro do ciclo de execução do agente.
+
+* **Arquivo central:** [`hermes_cli/plugins.py`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py)
+* **Ponto de entrada:** Diretório `~/.hermes/plugins/<id>/` contendo `plugin.yaml` e um `__init__.py` exportando a função `register(ctx: PluginContext)`.
+* **Hooks válidos (`VALID_HOOKS`, linhas 109-175):** Conjunto estrito de eventos interceptáveis pelo runtime (ex: `pre_llm_call`, `post_llm_call`, `pre_tool_call`, `post_tool_call`, `on_session_start`, `on_session_end`, `kanban_task_claimed`, `kanban_task_completed`).
+* **Hooks que alteram o fluxo pelo retorno:** `pre_llm_call` (injeta contexto), `pre_gateway_dispatch` (pula ou reescreve a mensagem antes do agente), `pre_tool_call` (bloqueia a chamada), `transform_tool_result`, `transform_terminal_output`, `transform_llm_output` e `pre_verify`. Os demais só observam.
+
+### Injeção de Contexto da Carta (`pre_llm_call`)
+* **Registro:** `ctx.register_hook("pre_llm_call", callback)` ([`hermes_cli/plugins.py:976`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L976)).
+* **Comportamento ([docs/features/hooks.md](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/website/docs/user-guide/features/hooks.md#pre_llm_call)):** O callback recebe `(session_id, user_message, conversation_history, ...)` e pode retornar uma string ou `{"context": "..."}`.
+* **Mecânica de injeção:** O texto retornado é concatenado e anexado à **mensagem de usuário do turno atual** (`current turn's user message`), preservando o prompt de sistema byte-estável para cache de prefixo de LLM. É por este hook que a carta do departamento (`fleet.yaml`: responsabilidades, limites e regras de escalação) entra no contexto do agente a cada turno.
+
+### Registro de Ferramentas (`register_tool`)
+* **Registro:** `ctx.register_tool(name, toolset, schema, handler, ...)` ([`hermes_cli/plugins.py:457`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L457)).
+* Permite registrar ferramentas de modelo dinâmicas diretamente no registro global sem alterar o core do Hermes. Ponto de entrada para ferramentas como a delegação interdepartamental (abrir tarefa para outro departamento validando contra `escalates_to`).
+
+### Injeção Ativa de Mensagens (`inject_message`)
+* **Chamada:** `ctx.inject_message(content, role="user", session_key=...)` ([`hermes_cli/plugins.py:604`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/plugins.py#L604)).
+* Envia uma mensagem para a fila de execução de uma sessão ativa do CLI, Desktop ou Gateway.
+* **Requisito de segurança:** Para injeção no Gateway, requer que o operador habilite explicitamente no `config.yaml`:
+  ```yaml
+  plugins:
+    entries:
+      <plugin_id>:
+        allow_gateway_injection: true
+  ```
+
+---
+
 ## 5. `kanban.db`
 
 Quadro de tarefas durável e transacional compartilhado entre todos os perfis (`~/.hermes/kanban.db`).
@@ -143,6 +139,10 @@ Quadro de tarefas durável e transacional compartilhado entre todos os perfis (`
   * `parent_id TEXT NOT NULL`, `child_id TEXT NOT NULL` (Chave Primária Composta).
   * Criação do vínculo: [`hermes_cli/kanban_db.py:1446`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/kanban_db.py#L1446) (`INSERT OR IGNORE INTO task_links`).
   * **Trava de Dependência:** [`hermes_cli/kanban_db.py:2198`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/hermes_cli/kanban_db.py#L2198) (`_parents_satisfied`). Uma tarefa-filha é retida em `todo`/`blocked` e não transiciona para `ready` enquanto qualquer tarefa-pai listada em `task_links` estiver fora de `done` ou `archived`.
+
+### Como um perfil cria tarefas no Kanban hoje
+1. **Via Model Tool (`kanban_create`):** Ferramenta nativa do toolset `kanban` (handler em [`tools/kanban_tools.py:1053`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/tools/kanban_tools.py#L1053) e schema em [`tools/kanban_tools_schemas.py:389`](https://github.com/NousResearch/hermes-agent/blob/e05b16348b1d06a3311237423b0a4fc30d9c5aa1/tools/kanban_tools_schemas.py#L389)). Requer o toolset `kanban` habilitado no perfil.
+2. **Via CLI no Terminal:** Execução via ferramenta `terminal` do comando `hermes kanban create --title "..." --body "..." --assignee <perfil> [--board <board>]`.
 
 ---
 
