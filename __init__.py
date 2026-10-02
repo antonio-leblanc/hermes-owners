@@ -169,18 +169,27 @@ def make_handoff_handler(ctx):
                 return json.dumps({"ok": False, "error": data["error"]})
 
             task_id = data.get("task_id") if isinstance(data, dict) else None
+            real_status = (data.get("status") if isinstance(data, dict) else None) or "blocked"
+
+            if real_status != "blocked":
+                message = (
+                    f"A handoff task {task_id or ''} for this ticket already exists on Kanban for "
+                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
+                )
+            else:
+                message = (
+                    f"Successfully created handoff task {task_id or ''} on Kanban for "
+                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') "
+                    "in blocked status awaiting human review."
+                )
 
             return json.dumps({
                 "ok": True,
                 "task_id": task_id,
                 "to_department": canonical_target_dept,
                 "assignee": target_profile,
-                "status": "blocked",
-                "message": (
-                    f"Successfully created handoff task {task_id or ''} on Kanban for "
-                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') "
-                    "in blocked status awaiting human review."
-                ),
+                "status": real_status,
+                "message": message,
             })
         except Exception as e:
             logger.exception("Failed to dispatch kanban_create in workforce handoff")
