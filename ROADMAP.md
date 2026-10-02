@@ -29,7 +29,6 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 - Demo mode that anonymizes users.
 - **Handoffs without a human.** Once approvals show the routing is right, tasks stop being born `blocked`. The whitelist question comes back with it: cap handoff chains and catch bot-to-bot loops.
 - **Route before the turn.** A decision model ([Laya](https://huggingface.co/blog/sora-2/laya-ai-model-how-it-works-run-it-locally-and-eval), open; Jev, API) on `pre_gateway_dispatch` answers "whose is this?" in milliseconds, before a full LLM turn. Laya needs fine-tuning, and every human-approved handoff is a labeled example for it.
-- **Lean on tokens without building it here.** The install docs recommend [`rtk-rewrite`](https://hermes-agent.nousresearch.com/docs/plugins/rtk-rewrite) for terminal-heavy departments.
 
 ## Open questions
 
