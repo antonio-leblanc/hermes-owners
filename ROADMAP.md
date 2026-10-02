@@ -31,10 +31,10 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 ## Open questions
 
 - **A reopened ticket does not hand off again.** The idempotency key returns any non-archived task, `done` included. For now a human decides.
-- **Skills across departments.** A department that hands off should not need its own copy of the owner's skills. Hermes Business already ships a team skill library, so the question is what is left for the plugin, if anything.
 - **Name.** Provisional.
 
 ## Not doing
 
 - Goals that flow down from management and reporting hierarchy.
 - Budget circuit breakers: Hermes Business and `hermes-telemetry` cover cost.
+- Skill management across profiles: Hermes syncs shared skills for multi-member orgs (`~/.hermes/skills/_org/`). A department hands off the request, not its skills.
