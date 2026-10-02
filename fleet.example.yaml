@@ -1,0 +1,32 @@
+# Charter of a fictional company. Copy to fleet.yaml to use it. Format still in design.
+company: Acme Solar
+
+departments:
+  support:
+    profile: support
+    owns:
+      - Product usage questions
+      - Customer ticket status
+    does_not_own:
+      - Bugs and infrastructure failures
+    escalates_to: tech
+
+  tech:
+    profile: dev
+    owns:
+      - Bugs, incidents and infrastructure failures
+      - Pull requests and code review
+
+  sales:
+    profile: sales
+    owns:
+      - Proposals and commercial follow-up
+    does_not_own:
+      - Contracts and billing
+    escalates_to: operations
+
+  operations:
+    profile: ops
+    owns:
+      - Contracts and billing
+      - Priorities that cross departments
