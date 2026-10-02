@@ -11,6 +11,7 @@ A Hermes plugin that makes a fleet of profiles work as the departments of a huma
 - `plugin.yaml` + `__init__.py`: the native plugin. The repo root is the plugin directory (`~/.hermes/plugins/workforce`).
 - `fleet.example.yaml`: fictional company (Acme Solar). A real `fleet.yaml` lives only in the local install and is git-ignored. Without it the plugin injects nothing; it never falls back to the example.
 - `docs/hermes-internals.md`: study notebook, in Portuguese, pinned to a `hermes-agent` commit.
+- `ROADMAP.md`: where the project goes and what comes next. Check it before proposing scope; anything under "Not doing" needs a decision first.
 
 ## Rules
 
