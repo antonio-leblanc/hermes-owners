@@ -62,12 +62,11 @@ def build_charter(fleet: dict, profile: str) -> str | None:
     if dept.get("does_not_own"):
         lines.append("You do not own: " + "; ".join(dept["does_not_own"]) + ".")
     escalates = dept.get("escalates_to")
-    if escalates:
-        escalates_str = ", ".join(escalates) if isinstance(escalates, list) else str(escalates)
-        lines.append(
-            f"When a request is not yours, do not try to solve it: hand it off to {escalates_str} using the `handoff_task` tool. "
-            "Only say you escalated or registered something if a tool call actually did it."
-        )
+    default_hint = f" (default: {', '.join(escalates) if isinstance(escalates, list) else escalates})" if escalates else ""
+    lines.append(
+        f"When a request is not yours, do not try to solve it: hand it off to the owner department{default_hint} using the `handoff_task` tool. "
+        "Only say you escalated or registered something if a tool call actually did it."
+    )
 
     others = [f"- {k}: " + "; ".join(d.get("owns") or []) for k, d in departments.items() if k != mine]
     if others:
@@ -125,7 +124,7 @@ HANDOFF_TASK_SCHEMA = {
         "properties": {
             "to_department": {
                 "type": "string",
-                "description": "Destination department name as defined in the company charter (e.g. 'tech'). Must match escalates_to.",
+                "description": "Destination department name as defined in the company charter (e.g. 'tech').",
             },
             "title": {
                 "type": "string",
@@ -163,29 +162,27 @@ def make_handoff_handler(ctx):
             })
 
         my_dept = departments[my_dept_name]
-        escalates = my_dept.get("escalates_to")
-        if not escalates:
-            return json.dumps({
-                "ok": False,
-                "error": f"Department '{my_dept_name}' has no escalates_to target defined.",
-            })
 
-        allowed_targets = [escalates] if isinstance(escalates, str) else list(escalates)
-        allowed_targets_lower = {t.lower(): t for t in allowed_targets}
-
+        canonical_departments = {k.lower(): k for k in departments.keys()}
         to_dept_raw = (args.get("to_department") or "").strip()
         to_dept_key = to_dept_raw.lower()
 
-        if to_dept_key not in allowed_targets_lower:
+        if to_dept_key not in canonical_departments:
             return json.dumps({
                 "ok": False,
                 "error": (
-                    f"Policy violation: department '{my_dept_name}' can only escalate to "
-                    f"{allowed_targets}, not '{to_dept_raw}'."
+                    f"Unknown department '{to_dept_raw}'. Known departments: "
+                    f"{list(departments.keys())}."
                 ),
             })
 
-        canonical_target_dept = allowed_targets_lower[to_dept_key]
+        canonical_target_dept = canonical_departments[to_dept_key]
+        if canonical_target_dept == my_dept_name:
+            return json.dumps({
+                "ok": False,
+                "error": f"Department '{my_dept_name}' cannot hand off a task to itself.",
+            })
+
         target_info = departments.get(canonical_target_dept)
         if not target_info or not target_info.get("profile"):
             return json.dumps({
@@ -219,7 +216,7 @@ def make_handoff_handler(ctx):
             "initial_status": "blocked",
         }
         if ticket_id:
-            dispatch_args["idempotency_key"] = f"workforce:{my_dept_name}:{ticket_id}"
+            dispatch_args["idempotency_key"] = f"workforce:{my_dept_name}:{canonical_target_dept}:{ticket_id}"
 
         try:
             res = ctx.dispatch_tool("kanban_create", dispatch_args)
@@ -238,17 +235,17 @@ def make_handoff_handler(ctx):
 
             task_id = data.get("task_id") if isinstance(data, dict) else None
             real_status = (data.get("status") if isinstance(data, dict) else None) or "blocked"
+            subscribed = bool(data.get("subscribed", False)) if isinstance(data, dict) else False
 
-            if real_status != "blocked":
+            if real_status == "blocked":
                 message = (
-                    f"A handoff task {task_id or ''} for this ticket already exists on Kanban for "
-                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
+                    f"Handoff task {task_id or ''} for department '{canonical_target_dept}' "
+                    f"(assignee: '{target_profile}') is in blocked status awaiting human review."
                 )
             else:
                 message = (
-                    f"Successfully created handoff task {task_id or ''} on Kanban for "
-                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') "
-                    "in blocked status awaiting human review."
+                    f"Handoff task {task_id or ''} for ticket '{ticket_id or ''}' exists on Kanban for "
+                    f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
                 )
 
             # Notify the target department, unless the task already existed past blocked
@@ -271,6 +268,7 @@ def make_handoff_handler(ctx):
                 "to_department": canonical_target_dept,
                 "assignee": target_profile,
                 "status": real_status,
+                "subscribed": subscribed,
                 "message": message,
             })
         except Exception as e:
