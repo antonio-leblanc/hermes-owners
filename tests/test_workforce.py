@@ -25,6 +25,10 @@ def test_handoff_task_policy_enforcement(monkeypatch):
                 "profile": "dev",
                 "owns": ["Bugs"],
             },
+            "sales": {
+                "profile": "sales-agent",
+                "owns": ["Pricing and quotes"],
+            },
         },
     }
     monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
@@ -33,14 +37,20 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     ctx.profile_name = "support-test"
     handler = wf.make_handoff_handler(ctx)
 
-    # Disallowed destination
+    # Unknown destination rejected
     res_raw = handler({"to_department": "finance", "title": "Pay invoice", "context": "urgent"})
     res = json.loads(res_raw)
     assert res["ok"] is False
-    assert "Policy violation" in res["error"]
+    assert "Unknown department 'finance'" in res["error"]
 
-    # Allowed destination dispatches to kanban_create
-    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-100", "status": "blocked"})
+    # Handoff to self rejected
+    res_self_raw = handler({"to_department": "support", "title": "Self task", "context": "loop"})
+    res_self = json.loads(res_self_raw)
+    assert res_self["ok"] is False
+    assert "cannot hand off a task to itself" in res_self["error"]
+
+    # Hand off to default escalates_to ("tech") dispatches to kanban_create
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-100", "status": "blocked", "subscribed": True})
     res_raw2 = handler({
         "to_department": "tech",
         "title": "Fix login crash",
@@ -51,6 +61,9 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     assert res2["ok"] is True
     assert res2["task_id"] == "task-100"
     assert res2["status"] == "blocked"
+    assert res2["subscribed"] is True
+    assert "Successfully created" not in res2["message"]
+    assert "awaiting human review" in res2["message"]
 
     # Check dispatch args passed to ctx.dispatch_tool
     ctx.dispatch_tool.assert_called_once()
@@ -58,7 +71,24 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     assert args_called["title"] == "Fix login crash"
     assert args_called["assignee"] == "dev"
     assert args_called["initial_status"] == "blocked"
-    assert args_called["idempotency_key"] == "workforce:support:#8819"
+    assert args_called["idempotency_key"] == "workforce:support:tech:#8819"
+
+    # Hand off to any other department in charter ("sales") is also allowed
+    ctx.dispatch_tool.reset_mock()
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-101", "status": "blocked", "subscribed": False})
+    res_sales_raw = handler({
+        "to_department": "sales",
+        "title": "Enterprise inquiry",
+        "context": "Customer wants 500 panels",
+        "ticket_id": "#8820",
+    })
+    res_sales = json.loads(res_sales_raw)
+    assert res_sales["ok"] is True
+    assert res_sales["task_id"] == "task-101"
+    assert res_sales["subscribed"] is False
+    args_sales = ctx.dispatch_tool.call_args[0][1]
+    assert args_sales["assignee"] == "sales-agent"
+    assert args_sales["idempotency_key"] == "workforce:support:sales:#8820"
 
 
 def test_completed_handoff_notifies_origin_department(monkeypatch):
