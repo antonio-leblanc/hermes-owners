@@ -219,18 +219,12 @@ def make_handoff_handler(ctx):
 
         body = "\n".join(body_lines)
 
-        target_initial_status_raw = (
-            target_info.get("initial_status")
-            or target_info.get("task_initial_status")
-            or "blocked"
-        )
-        if isinstance(target_initial_status_raw, str) and target_initial_status_raw.strip().lower() in ("ready", "running"):
-            kanban_initial_status = "running"
-            default_real_status = "ready"
+        # Core's "running" means not parked: the task is born ready. Anything
+        # other than "ready" falls back to blocked, never triage.
+        if target_info.get("initial_status") == "ready":
+            kanban_initial_status, default_real_status = "running", "ready"
         else:
-            # Default to blocked; never triage.
-            kanban_initial_status = "blocked"
-            default_real_status = "blocked"
+            kanban_initial_status, default_real_status = "blocked", "blocked"
 
         dispatch_args = {
             "title": title,

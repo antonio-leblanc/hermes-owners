@@ -1,8 +1,8 @@
 # hermes-workforce
 
-> Status: in active development. Works on a test profile.
+> Status: in active development. First production deployment under way.
 
-A [Hermes](https://github.com/NousResearch/hermes-agent) plugin where each department of a company gets an agent that knows what it owns. Talk to any of them: if the request isn't theirs, they hand it off to the department their charter escalates to, with a trail and a human approving.
+A [Hermes](https://github.com/NousResearch/hermes-agent) plugin where each department of a company gets an agent that knows what it owns. Talk to any of them: if the request isn't theirs, they hand it off to the owner, with a trail and a human deciding what changes.
 
 People should not need to know which bot handles what. The bots should. Handoff is a task on Hermes' native kanban, with a trail of who asked and where it stands. No second orchestrator beside Hermes.
 
@@ -10,9 +10,9 @@ People should not need to know which bot handles what. The bots should. Handoff 
 
 Telling a bot what is not its job is half the problem. Without a way to pass the request on, it either tries to solve it anyway or says it escalated when nothing happened. Boundaries and handoff only work together.
 
-## Ownership follows the problem, tools follow the work
+## Ownership follows the problem
 
-A department can use another department's tools to finish its own work: tech closes the support ticket for the bug it just fixed. When the problem itself belongs to another department, it hands off instead. `owns` in the charter is responsibility, not access.
+Each team talks to its own agent. When a problem, or a step of it, belongs to another department, the agent hands it off and leaves the knowledge with that department's agent. Tech does not close the support ticket for the bug it fixed: it hands it back to support, who owns the reply to the customer.
 
 ## Scope
 
