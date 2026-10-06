@@ -6,3 +6,9 @@ provides_hooks:
   - kanban_task_completed
 provides_tools:
   - handoff_task
+config_schema:
+  fleet_path:
+    type: str
+    default: "~/.hermes/fleet.yaml"
+    label: "Fleet charter"
+    description: "Path to the fleet.yaml that maps departments to profiles"

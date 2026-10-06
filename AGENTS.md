@@ -16,7 +16,7 @@ A Hermes plugin that makes a fleet of profiles work as the departments of a huma
 ## Rules
 
 - **Public repo.** No real company, person, profile name, user id or data from a real `state.db`. Examples use Acme Solar only.
-- **Public SDK surface only.** `register(ctx)`, `ctx.register_hook`, `ctx.register_tool`, `ctx.profile_name`, `ctx.dispatch_tool`. No imports from Hermes internals (`hermes_cli.*`, `hermes_yaml`, ...). Third-party libs Hermes already ships are fine (`ruamel.yaml`).
+- **Public SDK surface only.** `register(ctx)`, `ctx.register_hook`, `ctx.register_tool`, `ctx.profile_name`, `ctx.dispatch_tool`, `ctx.get_config`. Settings are declared in `config_schema` (the Desktop builds the form); no settings UI of our own. No imports from Hermes internals (`hermes_cli.*`, `hermes_yaml`, ...). Third-party libs Hermes already ships are fine (`ruamel.yaml`).
 - **Manifest matches code.** Every hook or tool in `plugin.yaml` is registered unconditionally in `register(ctx)`.
 - **Tests guard rules, not syntax.** Write a test only for a rule that could silently break: who may escalate to whom, idempotency, who gets told when a handoff ends. No tests that restate a string template, a parser on its own happy path, or the standard library. Few tests, each one worth reading.
 - **Validate before committing:** `hermes plugins doctor . --ci`.
