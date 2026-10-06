@@ -207,6 +207,16 @@ def make_handoff_handler(ctx):
         if ticket_id:
             body_lines.append(f"**Ticket Ref:** `{ticket_id}`")
         body_lines.append(f"\n### Context & Details\n{context}")
+
+        intake = target_info.get("intake")
+        if intake:
+            if isinstance(intake, str) and intake.strip():
+                body_lines.append(f"\n### Department Intake ({canonical_target_dept})\n{intake.strip()}")
+            elif isinstance(intake, list):
+                intake_text = "\n".join(f"- {str(item)}" for item in intake if item)
+                if intake_text.strip():
+                    body_lines.append(f"\n### Department Intake ({canonical_target_dept})\n{intake_text.strip()}")
+
         body = "\n".join(body_lines)
 
         dispatch_args = {
