@@ -190,3 +190,83 @@ def test_handoff_task_appends_target_intake(monkeypatch):
     assert "### Department Intake (sales)" in body_sales
     assert "- Qualify lead revenue" in body_sales
     assert "- Do not offer custom pricing without finance" in body_sales
+
+
+def test_handoff_task_initial_status_configurable(monkeypatch):
+    fleet = {
+        "company": "Acme Solar",
+        "departments": {
+            "support": {
+                "profile": "support-test",
+                "owns": ["Customer questions"],
+                "escalates_to": "tech",
+            },
+            "tech": {
+                "profile": "dev",
+                "owns": ["Bugs"],
+                "initial_status": "ready",
+            },
+            "ops": {
+                "profile": "ops-agent",
+                "owns": ["Operations"],
+                "initial_status": "blocked",
+            },
+            "triage_dept": {
+                "profile": "triage-agent",
+                "owns": ["Misc"],
+                "initial_status": "triage",
+            },
+        },
+    }
+    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+
+    ctx = MagicMock()
+    ctx.profile_name = "support-test"
+    handler = wf.make_handoff_handler(ctx)
+
+    # 1. Destination with initial_status="ready" -> dispatches "running" (creating "ready" task)
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-ready-1", "status": "ready", "subscribed": True})
+    res_raw = handler({
+        "to_department": "tech",
+        "title": "Investigate bug",
+        "context": "Bug details",
+        "ticket_id": "#1001",
+    })
+    res = json.loads(res_raw)
+    assert res["ok"] is True
+    assert res["status"] == "ready"
+    assert "ready for execution" in res["message"]
+    args_tech = ctx.dispatch_tool.call_args[0][1]
+    assert args_tech["initial_status"] == "running"
+
+    # 2. Destination with explicit initial_status="blocked" -> dispatches "blocked"
+    ctx.dispatch_tool.reset_mock()
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-blocked-1", "status": "blocked", "subscribed": True})
+    res_ops_raw = handler({
+        "to_department": "ops",
+        "title": "Ops review",
+        "context": "Contract details",
+        "ticket_id": "#1002",
+    })
+    res_ops = json.loads(res_ops_raw)
+    assert res_ops["ok"] is True
+    assert res_ops["status"] == "blocked"
+    assert "awaiting human review" in res_ops["message"]
+    args_ops = ctx.dispatch_tool.call_args[0][1]
+    assert args_ops["initial_status"] == "blocked"
+
+    # 3. Destination attempting "triage" -> never uses triage, falls back to "blocked"
+    ctx.dispatch_tool.reset_mock()
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-triage-1", "status": "blocked", "subscribed": True})
+    res_triage_raw = handler({
+        "to_department": "triage_dept",
+        "title": "Triage attempt",
+        "context": "Needs review",
+        "ticket_id": "#1003",
+    })
+    res_triage = json.loads(res_triage_raw)
+    assert res_triage["ok"] is True
+    assert res_triage["status"] == "blocked"
+    args_triage = ctx.dispatch_tool.call_args[0][1]
+    assert args_triage["initial_status"] == "blocked"
+

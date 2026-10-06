@@ -12,13 +12,15 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 
 ## Now: first real deployment (support → tech)
 
-- **Hand off to the owner, not only to `escalates_to`.** Any department in the charter is a valid target, and `escalates_to` becomes the default the charter suggests. Every task is born `blocked` with a human approving, so a whitelist adds little safety. The idempotency key gains the target department, or a ticket handed to tech and then to another department gets the tech task back. The README changes with the code.
+The flow: support hands a ticket to tech; tech's agent diagnoses right away without touching code and opens an issue; a human works the issue and the PR, then tells the agent to close; tech hands the ticket back to support, whose agent drafts the reply and a person sends it.
+
+- **Hand back to the origin.** The receiving department hands the finished work back with the same ticket reference, and the origin owns the reply.
+- **First real escalation, end to end,** opened by a person on the support team.
 - **Check whether core already closes the loop.** `kanban_create` called from a gateway session subscribes that chat to completion and block events, and returns `subscribed`; the handoff passes it through. If the origin chat gets notified on completion, drop the `kanban_task_completed` hook, the body parser and the completion webhook. Core does not tell the target department a `blocked` task is waiting, so that notice stays.
-- **Neutral message on a repeated handoff.** `kanban_create` does not say whether the task is new, so a ticket handed off again while still `blocked` must not read as "Successfully created".
-- **Run on a production support profile**, not only a test profile.
 
 ## Next
 
+- Cap handoff chains and catch bot-to-bot loops, now that tasks can be born `ready`.
 - Full charter of a real fleet: what each department owns, does not own, and where it escalates.
 - Adoption counting rule, fixed before the dashboard: a human message is `role='user'` with `sessions.source` outside `cli, cron, kanban, acp, api_server, subagent, tool, recovered`, with an option to exclude admins.
 - Dashboard: live org chart and adoption per department, read-only over each profile's `state.db` and the shared `kanban.db`. It proves the structure serves people; it is not the product.
@@ -27,7 +29,6 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 
 - Install in minutes: docs, a charter walkthrough, entry in the plugin catalog.
 - Demo mode that anonymizes users.
-- **Handoffs without a human.** Once approvals show the routing is right, tasks stop being born `blocked`. The whitelist question comes back with it: cap handoff chains and catch bot-to-bot loops.
 - **Route before the turn.** A decision model ([Laya](https://huggingface.co/blog/sora-2/laya-ai-model-how-it-works-run-it-locally-and-eval), open; Jev, API) on `pre_gateway_dispatch` answers "whose is this?" in milliseconds, before a full LLM turn. Laya needs fine-tuning, and every human-approved handoff is a labeled example for it.
 
 ## Open questions

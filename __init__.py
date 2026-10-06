@@ -116,8 +116,8 @@ HANDOFF_TASK_SCHEMA = {
     "name": "handoff_task",
     "description": (
         "Hand off a request or ticket that belongs to another department according to the company charter. "
-        "Opens a task on the Hermes Kanban in blocked status (requiring human approval before execution) "
-        "for the destination department's profile, carrying ticket and request details."
+        "Opens a task on the Hermes Kanban for the destination department's profile "
+        "(in ready or blocked status as configured in the charter) carrying ticket and request details."
     ),
     "parameters": {
         "type": "object",
@@ -219,11 +219,18 @@ def make_handoff_handler(ctx):
 
         body = "\n".join(body_lines)
 
+        # Core's "running" means not parked: the task is born ready. Anything
+        # other than "ready" falls back to blocked, never triage.
+        if target_info.get("initial_status") == "ready":
+            kanban_initial_status, default_real_status = "running", "ready"
+        else:
+            kanban_initial_status, default_real_status = "blocked", "blocked"
+
         dispatch_args = {
             "title": title,
             "body": body,
             "assignee": target_profile,
-            "initial_status": "blocked",
+            "initial_status": kanban_initial_status,
         }
         if ticket_id:
             dispatch_args["idempotency_key"] = f"workforce:{my_dept_name}:{canonical_target_dept}:{ticket_id}"
@@ -244,7 +251,7 @@ def make_handoff_handler(ctx):
                 return json.dumps({"ok": False, "error": data["error"]})
 
             task_id = data.get("task_id") if isinstance(data, dict) else None
-            real_status = (data.get("status") if isinstance(data, dict) else None) or "blocked"
+            real_status = (data.get("status") if isinstance(data, dict) else None) or default_real_status
             subscribed = bool(data.get("subscribed", False)) if isinstance(data, dict) else False
 
             if real_status == "blocked":
@@ -252,15 +259,20 @@ def make_handoff_handler(ctx):
                     f"Handoff task {task_id or ''} for department '{canonical_target_dept}' "
                     f"(assignee: '{target_profile}') is in blocked status awaiting human review."
                 )
+            elif real_status == "ready":
+                message = (
+                    f"Handoff task {task_id or ''} for department '{canonical_target_dept}' "
+                    f"(assignee: '{target_profile}') is ready for execution."
+                )
             else:
                 message = (
                     f"Handoff task {task_id or ''} for ticket '{ticket_id or ''}' exists on Kanban for "
                     f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
                 )
 
-            # Notify the target department, unless the task already existed past blocked
+            # Notify the target department, unless the task already existed past blocked/ready
             target_notify_url = target_info.get("notification_webhook")
-            if target_notify_url and real_status == "blocked":
+            if target_notify_url and real_status in ("blocked", "ready"):
                 _send_notification(target_notify_url, {
                     "event": "handoff_created",
                     "task_id": task_id,
