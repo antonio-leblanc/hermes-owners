@@ -12,6 +12,7 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 
 ## Now: first real deployment (support → tech)
 
+- **Configurable initial task status (`ready` or `blocked`) per department.** Each department in `fleet.yaml` can specify `initial_status: ready` or `blocked` (default: `blocked`). `handoff_task` respects this so receiving areas like tech can start diagnosing immediately without waiting for human unblock. Tasks never start in `triage`.
 - **Hand off to the owner, not only to `escalates_to`.** Any department in the charter is a valid target, and `escalates_to` becomes the default the charter suggests. Every task is born `blocked` with a human approving, so a whitelist adds little safety. The idempotency key gains the target department, or a ticket handed to tech and then to another department gets the tech task back. The README changes with the code.
 - **Check whether core already closes the loop.** `kanban_create` called from a gateway session subscribes that chat to completion and block events, and returns `subscribed`; the handoff passes it through. If the origin chat gets notified on completion, drop the `kanban_task_completed` hook, the body parser and the completion webhook. Core does not tell the target department a `blocked` task is waiting, so that notice stays.
 - **Neutral message on a repeated handoff.** `kanban_create` does not say whether the task is new, so a ticket handed off again while still `blocked` must not read as "Successfully created".
