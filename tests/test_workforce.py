@@ -130,3 +130,63 @@ def test_completed_handoff_notifies_origin_department(monkeypatch):
     ctx.dispatch_tool.return_value = json.dumps({"task": {"id": "task-101", "body": "Regular task"}})
     wf.make_task_completed_handler(ctx)(task_id="task-101")
     assert sent == []
+
+
+def test_handoff_task_appends_target_intake(monkeypatch):
+    fleet = {
+        "company": "Acme Solar",
+        "departments": {
+            "support": {
+                "profile": "support-test",
+                "owns": ["Customer questions"],
+                "escalates_to": "tech",
+            },
+            "tech": {
+                "profile": "dev",
+                "owns": ["Bugs"],
+                "intake": "Investigate root cause and estimate complexity before modifying code.",
+            },
+            "sales": {
+                "profile": "sales-agent",
+                "owns": ["Sales"],
+                "intake": [
+                    "Qualify lead revenue",
+                    "Do not offer custom pricing without finance",
+                ],
+            },
+        },
+    }
+    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+
+    ctx = MagicMock()
+    ctx.profile_name = "support-test"
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-200", "status": "blocked", "subscribed": True})
+    handler = wf.make_handoff_handler(ctx)
+
+    # String intake
+    res_raw = handler({
+        "to_department": "tech",
+        "title": "Investigate 500 error",
+        "context": "Crash on /login",
+        "ticket_id": "#9942",
+    })
+    res = json.loads(res_raw)
+    assert res["ok"] is True
+    body = ctx.dispatch_tool.call_args[0][1]["body"]
+    assert "### Department Intake (tech)" in body
+    assert "Investigate root cause and estimate complexity before modifying code." in body
+
+    # List intake
+    ctx.dispatch_tool.reset_mock()
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-201", "status": "blocked", "subscribed": False})
+    res_sales_raw = handler({
+        "to_department": "sales",
+        "title": "New enterprise lead",
+        "context": "Needs 5000 panels",
+    })
+    res_sales = json.loads(res_sales_raw)
+    assert res_sales["ok"] is True
+    body_sales = ctx.dispatch_tool.call_args[0][1]["body"]
+    assert "### Department Intake (sales)" in body_sales
+    assert "- Qualify lead revenue" in body_sales
+    assert "- Do not offer custom pricing without finance" in body_sales

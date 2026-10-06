@@ -18,6 +18,9 @@ departments:
     owns:
       - Bugs, incidents and infrastructure failures
       - Pull requests and code review
+    intake: |
+      First investigate root cause and estimate complexity. Do not modify production code
+      on the first pass. Open a GitHub issue with the diagnostic summary and Zendesk link.
 
   sales:
     profile: sales
