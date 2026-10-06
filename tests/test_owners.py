@@ -31,7 +31,7 @@ def test_handoff_task_policy_enforcement(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
 
     ctx = MagicMock()
     ctx.profile_name = "support-test"
@@ -98,7 +98,7 @@ def test_completed_handoff_notifies_origin_department(monkeypatch):
             "tech": {"profile": "dev"},
         },
     }
-    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
     sent = []
     monkeypatch.setattr(wf, "_send_notification", lambda url, payload: sent.append((url, payload)))
 
@@ -156,7 +156,7 @@ def test_handoff_task_appends_target_intake(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
 
     ctx = MagicMock()
     ctx.profile_name = "support-test"
@@ -218,7 +218,7 @@ def test_handoff_task_initial_status_configurable(monkeypatch):
             },
         },
     }
-    monkeypatch.setattr(wf, "load_fleet", lambda: fleet)
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
 
     ctx = MagicMock()
     ctx.profile_name = "support-test"
@@ -270,3 +270,12 @@ def test_handoff_task_initial_status_configurable(monkeypatch):
     args_triage = ctx.dispatch_tool.call_args[0][1]
     assert args_triage["initial_status"] == "blocked"
 
+
+def test_configured_fleet_path_never_falls_back(tmp_path, monkeypatch):
+    # A charter at the default location must not be picked up when the setting points elsewhere.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".hermes").mkdir()
+    (tmp_path / ".hermes" / "fleet.yaml").write_text("company: Wrong Co\n", encoding="utf-8")
+
+    assert wf.get_fleet_path(str(tmp_path / "missing.yaml")) is None
+    assert wf.get_fleet_path() == tmp_path / ".hermes" / "fleet.yaml"

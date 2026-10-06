@@ -16,8 +16,14 @@ _LAST_MTIME: float = 0.0
 _LAST_PATH: Path | None = None
 
 
-def get_fleet_path() -> Path | None:
-    """Resolve fleet.yaml: user home first (~/.hermes/fleet.yaml), then plugin directory."""
+def get_fleet_path(configured: str | None = None) -> Path | None:
+    """Resolve fleet.yaml: the `fleet_path` setting if set, else ~/.hermes/fleet.yaml, then plugin directory.
+
+    A configured path that does not exist resolves to None: it never falls back to another charter.
+    """
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.exists() else None
     home_fleet = Path.home() / ".hermes" / "fleet.yaml"
     if home_fleet.exists():
         return home_fleet
@@ -27,10 +33,10 @@ def get_fleet_path() -> Path | None:
     return None
 
 
-def load_fleet() -> dict:
+def load_fleet(configured: str | None = None) -> dict:
     """Read fleet.yaml with mtime-based dynamic reload. Never falls back to example charter."""
     global _FLEET_CACHE, _LAST_MTIME, _LAST_PATH
-    fleet_path = get_fleet_path()
+    fleet_path = get_fleet_path(configured)
     if not fleet_path or not fleet_path.exists():
         _FLEET_CACHE = {}
         _LAST_MTIME = 0.0
@@ -147,7 +153,7 @@ HANDOFF_TASK_SCHEMA = {
 
 def make_handoff_handler(ctx):
     def handoff_task(args: dict, **kwargs) -> str:
-        fleet = load_fleet()
+        fleet = load_fleet(ctx.get_config("fleet_path"))
         if not fleet:
             return json.dumps({"ok": False, "error": "No fleet.yaml found for owners plugin."})
 
@@ -318,7 +324,7 @@ def make_task_completed_handler(ctx):
         logger.info("owners: handoff %s (ticket %s) done, %s -> %s",
                     task_id, meta.get("ticket_id"), from_dept, meta.get("to_department"))
 
-        dept_info = (load_fleet().get("departments") or {}).get(from_dept) or {}
+        dept_info = (load_fleet(ctx.get_config("fleet_path")).get("departments") or {}).get(from_dept) or {}
         origin_notify_url = dept_info.get("notification_webhook")
         if origin_notify_url:
             _send_notification(origin_notify_url, {
@@ -336,13 +342,13 @@ def make_task_completed_handler(ctx):
 
 
 def register(ctx):
-    fleet = load_fleet()
-    fleet_path = get_fleet_path()
-    if not fleet:
-        logger.warning("owners: no fleet.yaml at %s or ~/.hermes/fleet.yaml, nothing to inject", fleet_path)
+    configured = ctx.get_config("fleet_path")
+    if not load_fleet(configured):
+        logger.warning("owners: no fleet.yaml at %s, nothing to inject",
+                       configured or "~/.hermes/fleet.yaml or the plugin directory")
 
     def inject_charter(**kwargs):
-        current_fleet = load_fleet()
+        current_fleet = load_fleet(ctx.get_config("fleet_path"))
         if not current_fleet:
             return None
         charter = build_charter(current_fleet, ctx.profile_name)
