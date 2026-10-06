@@ -20,7 +20,7 @@ departments:
       - Pull requests and code review
     intake: |
       First investigate root cause and estimate complexity. Do not modify production code
-      on the first pass. Open a GitHub issue with the diagnostic summary and Zendesk link.
+      on the first pass. Open a GitHub issue with the diagnostic summary and ticket link.
 
   sales:
     profile: sales
