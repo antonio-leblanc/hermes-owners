@@ -1,4 +1,4 @@
-"""hermes-workforce: injects company charter, provides departmental handoff, and closes the resolution loop."""
+"""hermes-owners: injects company charter, provides departmental handoff, and closes the resolution loop."""
 
 import json
 import logging
@@ -44,7 +44,7 @@ def load_fleet() -> dict:
             _LAST_MTIME = mtime
             _LAST_PATH = fleet_path
     except Exception as e:
-        logger.warning("workforce: failed to load fleet at %s: %s", fleet_path, e)
+        logger.warning("owners: failed to load fleet at %s: %s", fleet_path, e)
     return _FLEET_CACHE
 
 
@@ -81,13 +81,13 @@ def _send_notification(webhook_url: str, payload: dict) -> bool:
         req = urllib.request.Request(
             webhook_url,
             data=data,
-            headers={"Content-Type": "application/json", "User-Agent": "hermes-workforce/0.1.0"},
+            headers={"Content-Type": "application/json", "User-Agent": "hermes-owners/0.1.0"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             return 200 <= resp.status < 300
     except Exception as e:
-        logger.warning("workforce: notification webhook failed for %s: %s", webhook_url, e)
+        logger.warning("owners: notification webhook failed for %s: %s", webhook_url, e)
         return False
 
 
@@ -149,7 +149,7 @@ def make_handoff_handler(ctx):
     def handoff_task(args: dict, **kwargs) -> str:
         fleet = load_fleet()
         if not fleet:
-            return json.dumps({"ok": False, "error": "No fleet.yaml found for workforce plugin."})
+            return json.dumps({"ok": False, "error": "No fleet.yaml found for owners plugin."})
 
         departments = fleet.get("departments") or {}
         my_profile = ctx.profile_name
@@ -233,7 +233,7 @@ def make_handoff_handler(ctx):
             "initial_status": kanban_initial_status,
         }
         if ticket_id:
-            dispatch_args["idempotency_key"] = f"workforce:{my_dept_name}:{canonical_target_dept}:{ticket_id}"
+            dispatch_args["idempotency_key"] = f"owners:{my_dept_name}:{canonical_target_dept}:{ticket_id}"
 
         try:
             res = ctx.dispatch_tool("kanban_create", dispatch_args)
@@ -294,7 +294,7 @@ def make_handoff_handler(ctx):
                 "message": message,
             })
         except Exception as e:
-            logger.exception("Failed to dispatch kanban_create in workforce handoff")
+            logger.exception("Failed to dispatch kanban_create in owners handoff")
             return json.dumps({"ok": False, "error": f"Failed to dispatch kanban task: {e}"})
 
     return handoff_task
@@ -307,15 +307,15 @@ def make_task_completed_handler(ctx):
         try:
             data = json.loads(ctx.dispatch_tool("kanban_show", {"task_id": task_id}))
         except Exception as e:
-            logger.warning("workforce: could not read task %s: %s", task_id, e)
+            logger.warning("owners: could not read task %s: %s", task_id, e)
             return
         task = data.get("task") or {}
         meta = parse_handoff_body(task.get("body"))
         from_dept = meta.get("from_department")
         if not from_dept:
-            return  # Not a workforce handoff task
+            return  # Not an owners handoff task
 
-        logger.info("workforce: handoff %s (ticket %s) done, %s -> %s",
+        logger.info("owners: handoff %s (ticket %s) done, %s -> %s",
                     task_id, meta.get("ticket_id"), from_dept, meta.get("to_department"))
 
         dept_info = (load_fleet().get("departments") or {}).get(from_dept) or {}
@@ -339,7 +339,7 @@ def register(ctx):
     fleet = load_fleet()
     fleet_path = get_fleet_path()
     if not fleet:
-        logger.warning("workforce: no fleet.yaml at %s or ~/.hermes/fleet.yaml, nothing to inject", fleet_path)
+        logger.warning("owners: no fleet.yaml at %s or ~/.hermes/fleet.yaml, nothing to inject", fleet_path)
 
     def inject_charter(**kwargs):
         current_fleet = load_fleet()
@@ -354,7 +354,7 @@ def register(ctx):
     ctx.register_hook("kanban_task_completed", make_task_completed_handler(ctx))
     ctx.register_tool(
         name="handoff_task",
-        toolset="workforce",
+        toolset="owners",
         schema=HANDOFF_TASK_SCHEMA,
         handler=make_handoff_handler(ctx),
         description=HANDOFF_TASK_SCHEMA["description"],

@@ -1,4 +1,4 @@
-name: workforce
+name: owners
 version: 0.1.0
 description: Makes a fleet of profiles work as the departments of a human company
 provides_hooks:

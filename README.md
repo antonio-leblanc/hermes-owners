@@ -1,4 +1,4 @@
-# hermes-workforce
+# hermes-owners
 
 > Status: in active development. First production deployment under way.
 
