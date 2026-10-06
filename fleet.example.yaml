@@ -4,7 +4,7 @@ company: Acme Solar
 departments:
   support:
     profile: support
-    notification_webhook: "https://support.example.com/webhooks/hermes-workforce"
+    notification_webhook: "https://support.example.com/webhooks/hermes-owners"
     owns:
       - Product usage questions
       - Customer ticket status

@@ -71,7 +71,7 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     assert args_called["title"] == "Fix login crash"
     assert args_called["assignee"] == "dev"
     assert args_called["initial_status"] == "blocked"
-    assert args_called["idempotency_key"] == "workforce:support:tech:#8819"
+    assert args_called["idempotency_key"] == "owners:support:tech:#8819"
 
     # Hand off to any other department in charter ("sales") is also allowed
     ctx.dispatch_tool.reset_mock()
@@ -88,7 +88,7 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     assert res_sales["subscribed"] is False
     args_sales = ctx.dispatch_tool.call_args[0][1]
     assert args_sales["assignee"] == "sales-agent"
-    assert args_sales["idempotency_key"] == "workforce:support:sales:#8820"
+    assert args_sales["idempotency_key"] == "owners:support:sales:#8820"
 
 
 def test_completed_handoff_notifies_origin_department(monkeypatch):
