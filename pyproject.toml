@@ -1,0 +1,11 @@
+[project]
+name = "hermes-owners"
+version = "0.1.0"
+description = "Makes a fleet of Hermes profiles work as the departments of a human company"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruamel.yaml>=0.18",
+]
