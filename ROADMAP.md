@@ -12,11 +12,11 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 
 ## Now: first real deployment (support → tech)
 
-The flow: support hands a ticket to tech; tech's agent diagnoses right away without touching code and opens an issue; a human works the issue and the PR, then tells the agent to close; tech hands the ticket back to support, whose agent drafts the reply and a person sends it.
+The flow: support hands a ticket to tech; tech's agent diagnoses right away without touching code, opens an issue and blocks the card; a human fixes it and closes the issue; tech hands the same card back to support, whose agent drafts the reply and a person sends it and completes the card.
 
-- **Hand back to the origin.** The receiving department hands the finished work back with the same ticket reference, and the origin owns the reply.
-- **First real escalation, end to end,** opened by a person on the support team.
-- **Hand back at the fix, not at the diagnosis.** Without a webhook, completing a handoff creates a return task for the origin department. Tech's intake completes the task right after diagnosing, so it should block (`kanban_block`, `needs_input`) until a human says the fix is in, and only then complete.
+- **First real escalation, end to end,** on one card, opened by a person on the support team.
+- **One-shot delegation** ([#16](https://github.com/antonio-leblanc/hermes-owners/issues/16)): the receiver completes the card and native notifications tell the origin, with no hand back. Comes with its first real case.
+- **Ownership by repository, not only by topic.** A charter that says fixes belong to tech sent a merge on support's own repository to tech. The charter has to name which repositories each department owns.
 
 ## Next
 
