@@ -1,10 +1,8 @@
-"""hermes-owners: injects company charter, provides departmental handoff, and closes the resolution loop."""
+"""hermes-owners: injects company charter and provides departmental handoff on a single kanban card."""
 
 import json
 import logging
-import urllib.request
 from pathlib import Path
-from typing import Any
 
 from ruamel.yaml import YAML
 
@@ -78,44 +76,6 @@ def build_charter(fleet: dict, profile: str) -> str | None:
     if others:
         lines.append("Other departments:\n" + "\n".join(others))
     return "\n".join(lines)
-
-
-def _send_notification(webhook_url: str, payload: dict) -> bool:
-    """Send an outbound JSON notification to a department webhook without blocking or raising."""
-    try:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            webhook_url,
-            data=data,
-            headers={"Content-Type": "application/json", "User-Agent": "hermes-owners/0.1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
-            return 200 <= resp.status < 300
-    except Exception as e:
-        logger.warning("owners: notification webhook failed for %s: %s", webhook_url, e)
-        return False
-
-
-def parse_handoff_body(body: str | None) -> dict:
-    """Extract structured handoff metadata from kanban task body."""
-    meta: dict[str, str] = {}
-    if not body:
-        return meta
-    for line in body.splitlines():
-        line = line.strip()
-        if line.startswith("**From Department:**"):
-            parts = line.replace("**From Department:**", "").strip()
-            dept = parts.split("(")[0].strip()
-            meta["from_department"] = dept
-        elif line.startswith("**To Department:**"):
-            parts = line.replace("**To Department:**", "").strip()
-            dept = parts.split("(")[0].strip()
-            meta["to_department"] = dept
-        elif line.startswith("**Ticket Ref:**"):
-            ref = line.replace("**Ticket Ref:**", "").strip().strip("`")
-            meta["ticket_id"] = ref
-    return meta
 
 
 HANDOFF_TASK_SCHEMA = {
@@ -223,6 +183,15 @@ def make_handoff_handler(ctx):
                 if intake_text.strip():
                     body_lines.append(f"\n### Department Intake ({canonical_target_dept})\n{intake_text.strip()}")
 
+        # Hand back the same card: request_review ends this stage and reassigns
+        # the card to the origin, so one request stays one card until it is done.
+        body_lines.append(
+            f"\n### Hand back\n"
+            f"This card is one stage of a request from {my_dept_name}. When your stage is done, "
+            f"do not call `kanban_complete`: call `kanban_request_review` with reviewer `{my_profile}` "
+            f"and a summary of what you did. Only {my_dept_name} completes the card."
+        )
+
         body = "\n".join(body_lines)
 
         # Core's "running" means not parked: the task is born ready. Anything
@@ -276,20 +245,6 @@ def make_handoff_handler(ctx):
                     f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
                 )
 
-            # Notify the target department, unless the task already existed past blocked/ready
-            target_notify_url = target_info.get("notification_webhook")
-            if target_notify_url and real_status in ("blocked", "ready"):
-                _send_notification(target_notify_url, {
-                    "event": "handoff_created",
-                    "task_id": task_id,
-                    "title": title,
-                    "ticket_id": ticket_id,
-                    "from_department": my_dept_name,
-                    "to_department": canonical_target_dept,
-                    "assignee": target_profile,
-                    "status": real_status,
-                })
-
             return json.dumps({
                 "ok": True,
                 "task_id": task_id,
@@ -304,92 +259,6 @@ def make_handoff_handler(ctx):
             return json.dumps({"ok": False, "error": f"Failed to dispatch kanban task: {e}"})
 
     return handoff_task
-
-
-def make_task_completed_handler(ctx):
-    """Observer for kanban_task_completed: tell the origin department its handoff is done.
-
-    When the origin department has a notification_webhook configured, sends a JSON
-    payload there. Otherwise, creates a return task on the origin department's kanban
-    so the loop closes without external infrastructure.
-    """
-    def on_kanban_task_completed(task_id: str, summary: str | None = None, **kwargs: Any) -> None:
-        try:
-            data = json.loads(ctx.dispatch_tool("kanban_show", {"task_id": task_id}))
-        except Exception as e:
-            logger.warning("owners: could not read task %s: %s", task_id, e)
-            return
-        task = data.get("task") or {}
-        meta = parse_handoff_body(task.get("body"))
-        from_dept = meta.get("from_department")
-        if not from_dept:
-            return  # Not an owners handoff task
-
-        to_dept = meta.get("to_department")
-        ticket_id = meta.get("ticket_id")
-        logger.info("owners: handoff %s (ticket %s) done, %s -> %s",
-                    task_id, ticket_id, from_dept, to_dept)
-
-        fleet = load_fleet(ctx.get_config("fleet_path"))
-        departments = fleet.get("departments") or {}
-        dept_info = departments.get(from_dept) or {}
-
-        resolution_summary = summary or task.get("result") or ""
-        origin_notify_url = dept_info.get("notification_webhook")
-
-        if origin_notify_url:
-            # Preferred path: push notification to the origin department's webhook.
-            _send_notification(origin_notify_url, {
-                "event": "handoff_completed",
-                "task_id": task_id,
-                "title": task.get("title"),
-                "ticket_id": ticket_id,
-                "from_department": from_dept,
-                "to_department": to_dept,
-                "assignee": task.get("assignee"),
-                "summary": resolution_summary,
-            })
-        else:
-            # Fallback: create a return kanban task so the origin department
-            # picks it up on its next cycle (or via kanban_notify_subs).
-            origin_profile = dept_info.get("profile")
-            if not origin_profile:
-                logger.warning("owners: origin dept %s has no profile, cannot create return task", from_dept)
-                return
-
-            return_title = f"↩️ Retorno: {task.get('title', 'Handoff concluído')}"
-            # No From/To Department markers: parse_handoff_body would read the return
-            # as a new handoff, and completing it would bounce another one back.
-            return_body_lines = [
-                f"**Returned by:** {to_dept or ctx.profile_name} (profile: `{ctx.profile_name}`)",
-            ]
-            if ticket_id:
-                return_body_lines.append(f"**Ticket Ref:** `{ticket_id}`")
-            return_body_lines.append("")
-            return_body_lines.append("### Resolução Técnica")
-            return_body_lines.append(resolution_summary or "(Resolução aplicada — ver detalhes no PR/Issue vinculado.)")
-            return_body_lines.append("")
-            return_body_lines.append(
-                "### Ação Esperada do Suporte\n"
-                "1. Revisar a resolução técnica acima.\n"
-                "2. Redigir minuta de resposta ao cliente no Zendesk.\n"
-                "3. **NÃO enviar** — um atendente humano deve revisar e enviar."
-            )
-
-            try:
-                ret = ctx.dispatch_tool("kanban_create", {
-                    "title": return_title,
-                    "body": "\n".join(return_body_lines),
-                    "assignee": origin_profile,
-                    "initial_status": "running",
-                    "idempotency_key": f"owners:return:{task_id}",
-                })
-                logger.info("owners: created return task for %s -> %s (ticket %s): %s",
-                            to_dept, from_dept, ticket_id, ret)
-            except Exception as e:
-                logger.warning("owners: failed to create return task for %s: %s", task_id, e)
-
-    return on_kanban_task_completed
 
 
 def register(ctx):
@@ -408,7 +277,6 @@ def register(ctx):
         return {"context": "[Company charter]\n" + charter}
 
     ctx.register_hook("pre_llm_call", inject_charter)
-    ctx.register_hook("kanban_task_completed", make_task_completed_handler(ctx))
     ctx.register_tool(
         name="handoff_task",
         toolset="owners",

@@ -3,7 +3,6 @@ version: 0.1.0
 description: Makes a fleet of profiles work as the departments of a human company
 provides_hooks:
   - pre_llm_call
-  - kanban_task_completed
 provides_tools:
   - handoff_task
 config_schema:

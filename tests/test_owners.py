@@ -91,74 +91,19 @@ def test_handoff_task_policy_enforcement(monkeypatch):
     assert args_sales["idempotency_key"] == "owners:support:sales:#8820"
 
 
-def test_completed_handoff_notifies_origin_department(monkeypatch):
-    fleet = {
-        "departments": {
-            "support": {"profile": "support-test", "notification_webhook": "https://support.example.com/webhook"},
-            "tech": {"profile": "dev"},
-        },
-    }
-    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
-    sent = []
-    monkeypatch.setattr(wf, "_send_notification", lambda url, payload: sent.append((url, payload)))
-
-    body = (
-        "**From Department:** support (profile: `support-test`)\n"
-        "**To Department:** tech (profile: `dev`)\n"
-        "**Ticket Ref:** `#8819`\n\n"
-        "### Context & Details\n500 error on /login"
-    )
-    ctx = MagicMock()
-    ctx.dispatch_tool.return_value = json.dumps(
-        {"task": {"id": "task-100", "title": "Fix login crash", "body": body, "assignee": "dev"}}
-    )
-    wf.make_task_completed_handler(ctx)(task_id="task-100", summary="Fixed session cookie parser")
-
-    assert sent == [("https://support.example.com/webhook", {
-        "event": "handoff_completed",
-        "task_id": "task-100",
-        "title": "Fix login crash",
-        "ticket_id": "#8819",
-        "from_department": "support",
-        "to_department": "tech",
-        "assignee": "dev",
-        "summary": "Fixed session cookie parser",
-    })]
-
-    # A task that is not a handoff notifies nobody.
-    sent.clear()
-    ctx.dispatch_tool.return_value = json.dumps({"task": {"id": "task-101", "body": "Regular task"}})
-    wf.make_task_completed_handler(ctx)(task_id="task-101")
-    assert sent == []
-
-
-def test_return_task_does_not_bounce_back(monkeypatch):
+def test_handoff_hands_back_the_same_card_to_origin(monkeypatch):
     fleet = {"departments": {"support": {"profile": "suporte"}, "tech": {"profile": "dev"}}}
     monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
-    body = (
-        "**From Department:** support (profile: `suporte`)\n"
-        "**To Department:** tech (profile: `dev`)\n"
-        "**Ticket Ref:** `#8819`"
-    )
-    created = []
-
-    def dispatch(tool, args):
-        if tool == "kanban_create":
-            created.append(args)
-            return json.dumps({"task_id": f"ret-{len(created)}"})
-        return json.dumps({"task": {"id": "task-100", "title": "Fix login", "body": body}})
-
     ctx = MagicMock()
-    ctx.profile_name = "dev"
-    ctx.dispatch_tool.side_effect = dispatch
-    wf.make_task_completed_handler(ctx)(task_id="task-100", summary="Fixed")
-    assert [c["assignee"] for c in created] == ["suporte"]
-    assert "#8819" in created[0]["body"].splitlines()[1]
+    ctx.profile_name = "suporte"
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-100", "status": "blocked"})
+    wf.make_handoff_handler(ctx)({"to_department": "tech", "title": "Fix login", "context": "500"})
 
-    # Completing the return task must not create another one.
-    body = created[0]["body"]
-    wf.make_task_completed_handler(ctx)(task_id="ret-1")
-    assert len(created) == 1
+    # The receiver returns the card to the origin profile instead of completing it.
+    body = ctx.dispatch_tool.call_args[0][1]["body"]
+    hand_back = body.split("### Hand back")[1]
+    assert "`kanban_request_review` with reviewer `suporte`" in hand_back
+    assert "do not call `kanban_complete`" in hand_back
 
 
 def test_handoff_task_appends_target_intake(monkeypatch):
