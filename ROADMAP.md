@@ -15,8 +15,8 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 The flow: support hands a ticket to tech; tech's agent diagnoses right away without touching code and opens an issue; a human works the issue and the PR, then tells the agent to close; tech hands the ticket back to support, whose agent drafts the reply and a person sends it.
 
 - **Hand back to the origin.** The receiving department hands the finished work back with the same ticket reference, and the origin owns the reply.
-- **First real escalation, end to end,** opened by a person on the support team.
-- **Check whether core already closes the loop.** `kanban_create` called from a gateway session subscribes that chat to completion and block events, and returns `subscribed`; the handoff passes it through. If the origin chat gets notified on completion, drop the `kanban_task_completed` hook, the body parser and the completion webhook. Core does not tell the target department a `blocked` task is waiting, so that notice stays.
+- ~~**First real escalation, end to end,** opened by a person on the support team.~~
+- ~~**Check whether core already closes the loop.**~~ Core's `kanban_notify_subs` handles notification. The plugin now creates a return kanban task (↩️ Retorno) as fallback when no webhook is configured.
 
 ## Next
 
