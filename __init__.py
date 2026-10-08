@@ -307,9 +307,13 @@ def make_handoff_handler(ctx):
 
 
 def make_task_completed_handler(ctx):
-    """Observer for kanban_task_completed: tell the origin department its handoff is done."""
+    """Observer for kanban_task_completed: tell the origin department its handoff is done.
+
+    When the origin department has a notification_webhook configured, sends a JSON
+    payload there. Otherwise, creates a return task on the origin department's kanban
+    so the loop closes without external infrastructure.
+    """
     def on_kanban_task_completed(task_id: str, summary: str | None = None, **kwargs: Any) -> None:
-        # kanban_show resolves the board the same way the worker does (HERMES_KANBAN_DB, current board).
         try:
             data = json.loads(ctx.dispatch_tool("kanban_show", {"task_id": task_id}))
         except Exception as e:
@@ -321,22 +325,68 @@ def make_task_completed_handler(ctx):
         if not from_dept:
             return  # Not an owners handoff task
 
+        to_dept = meta.get("to_department")
+        ticket_id = meta.get("ticket_id")
         logger.info("owners: handoff %s (ticket %s) done, %s -> %s",
-                    task_id, meta.get("ticket_id"), from_dept, meta.get("to_department"))
+                    task_id, ticket_id, from_dept, to_dept)
 
-        dept_info = (load_fleet(ctx.get_config("fleet_path")).get("departments") or {}).get(from_dept) or {}
+        fleet = load_fleet(ctx.get_config("fleet_path"))
+        departments = fleet.get("departments") or {}
+        dept_info = departments.get(from_dept) or {}
+
+        resolution_summary = summary or task.get("result") or ""
         origin_notify_url = dept_info.get("notification_webhook")
+
         if origin_notify_url:
+            # Preferred path: push notification to the origin department's webhook.
             _send_notification(origin_notify_url, {
                 "event": "handoff_completed",
                 "task_id": task_id,
                 "title": task.get("title"),
-                "ticket_id": meta.get("ticket_id"),
+                "ticket_id": ticket_id,
                 "from_department": from_dept,
-                "to_department": meta.get("to_department"),
+                "to_department": to_dept,
                 "assignee": task.get("assignee"),
-                "summary": summary or task.get("result"),
+                "summary": resolution_summary,
             })
+        else:
+            # Fallback: create a return kanban task so the origin department
+            # picks it up on its next cycle (or via kanban_notify_subs).
+            origin_profile = dept_info.get("profile")
+            if not origin_profile:
+                logger.warning("owners: origin dept %s has no profile, cannot create return task", from_dept)
+                return
+
+            return_title = f"↩️ Retorno: {task.get('title', 'Handoff concluído')}"
+            return_body_lines = [
+                f"**From Department:** {to_dept or 'tech'} (profile: `{ctx.profile_name}`)",
+                f"**To Department:** {from_dept} (profile: `{origin_profile}`)",
+            ]
+            if ticket_id:
+                return_body_lines.append(f"**Ticket Ref:** `{ticket_id}`")
+            return_body_lines.append("")
+            return_body_lines.append("### Resolução Técnica")
+            return_body_lines.append(resolution_summary or "(Resolução aplicada — ver detalhes no PR/Issue vinculado.)")
+            return_body_lines.append("")
+            return_body_lines.append(
+                "### Ação Esperada do Suporte\\n"
+                "1. Revisar a resolução técnica acima.\\n"
+                "2. Redigir minuta de resposta ao cliente no Zendesk.\\n"
+                "3. **NÃO enviar** — um atendente humano deve revisar e enviar."
+            )
+
+            try:
+                ret = ctx.dispatch_tool("kanban_create", {
+                    "title": return_title,
+                    "body": "\\n".join(return_body_lines),
+                    "assignee": origin_profile,
+                    "initial_status": "running",
+                    "idempotency_key": f"owners:return:{task_id}",
+                })
+                logger.info("owners: created return task for %s -> %s (ticket %s): %s",
+                            to_dept, from_dept, ticket_id, ret)
+            except Exception as e:
+                logger.warning("owners: failed to create return task for %s: %s", task_id, e)
 
     return on_kanban_task_completed
 
