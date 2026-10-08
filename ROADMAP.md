@@ -16,7 +16,7 @@ The flow: support hands a ticket to tech; tech's agent diagnoses right away with
 
 - **Hand back to the origin.** The receiving department hands the finished work back with the same ticket reference, and the origin owns the reply.
 - **First real escalation, end to end,** opened by a person on the support team.
-- **Check whether core already closes the loop.** `kanban_create` called from a gateway session subscribes that chat to completion and block events, and returns `subscribed`; the handoff passes it through. If the origin chat gets notified on completion, drop the `kanban_task_completed` hook, the body parser and the completion webhook. Core does not tell the target department a `blocked` task is waiting, so that notice stays.
+- **Hand back at the fix, not at the diagnosis.** Without a webhook, completing a handoff creates a return task for the origin department. Tech's intake completes the task right after diagnosing, so it should block (`kanban_block`, `needs_input`) until a human says the fix is in, and only then complete.
 
 ## Next
 

@@ -132,6 +132,35 @@ def test_completed_handoff_notifies_origin_department(monkeypatch):
     assert sent == []
 
 
+def test_return_task_does_not_bounce_back(monkeypatch):
+    fleet = {"departments": {"support": {"profile": "suporte"}, "tech": {"profile": "dev"}}}
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
+    body = (
+        "**From Department:** support (profile: `suporte`)\n"
+        "**To Department:** tech (profile: `dev`)\n"
+        "**Ticket Ref:** `#8819`"
+    )
+    created = []
+
+    def dispatch(tool, args):
+        if tool == "kanban_create":
+            created.append(args)
+            return json.dumps({"task_id": f"ret-{len(created)}"})
+        return json.dumps({"task": {"id": "task-100", "title": "Fix login", "body": body}})
+
+    ctx = MagicMock()
+    ctx.profile_name = "dev"
+    ctx.dispatch_tool.side_effect = dispatch
+    wf.make_task_completed_handler(ctx)(task_id="task-100", summary="Fixed")
+    assert [c["assignee"] for c in created] == ["suporte"]
+    assert "#8819" in created[0]["body"].splitlines()[1]
+
+    # Completing the return task must not create another one.
+    body = created[0]["body"]
+    wf.make_task_completed_handler(ctx)(task_id="ret-1")
+    assert len(created) == 1
+
+
 def test_handoff_task_appends_target_intake(monkeypatch):
     fleet = {
         "company": "Acme Solar",
