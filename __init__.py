@@ -358,9 +358,10 @@ def make_task_completed_handler(ctx):
                 return
 
             return_title = f"↩️ Retorno: {task.get('title', 'Handoff concluído')}"
+            # No From/To Department markers: parse_handoff_body would read the return
+            # as a new handoff, and completing it would bounce another one back.
             return_body_lines = [
-                f"**From Department:** {to_dept or 'tech'} (profile: `{ctx.profile_name}`)",
-                f"**To Department:** {from_dept} (profile: `{origin_profile}`)",
+                f"**Returned by:** {to_dept or ctx.profile_name} (profile: `{ctx.profile_name}`)",
             ]
             if ticket_id:
                 return_body_lines.append(f"**Ticket Ref:** `{ticket_id}`")
@@ -369,16 +370,16 @@ def make_task_completed_handler(ctx):
             return_body_lines.append(resolution_summary or "(Resolução aplicada — ver detalhes no PR/Issue vinculado.)")
             return_body_lines.append("")
             return_body_lines.append(
-                "### Ação Esperada do Suporte\\n"
-                "1. Revisar a resolução técnica acima.\\n"
-                "2. Redigir minuta de resposta ao cliente no Zendesk.\\n"
+                "### Ação Esperada do Suporte\n"
+                "1. Revisar a resolução técnica acima.\n"
+                "2. Redigir minuta de resposta ao cliente no Zendesk.\n"
                 "3. **NÃO enviar** — um atendente humano deve revisar e enviar."
             )
 
             try:
                 ret = ctx.dispatch_tool("kanban_create", {
                     "title": return_title,
-                    "body": "\\n".join(return_body_lines),
+                    "body": "\n".join(return_body_lines),
                     "assignee": origin_profile,
                     "initial_status": "running",
                     "idempotency_key": f"owners:return:{task_id}",
