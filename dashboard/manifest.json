@@ -1,0 +1,11 @@
+{
+  "name": "owners",
+  "label": "Areas",
+  "description": "Read-only company areas, ownership, bot freshness and observed handoffs",
+  "icon": "Globe",
+  "version": "0.1.0",
+  "tab": { "path": "/owners", "position": "after:kanban" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
