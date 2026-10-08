@@ -20,26 +20,14 @@
         h(Badge, { variant: "outline" }, b.status)),
       h("small", { className: "owners-muted" }, b.availability + " · " + time(b.updated_at)));
   }
-  // SDK 1.1.0 exposes no profile context/router subscription (runtime
-  // ee8dd6c886). Observe only native history writes, not the entire DOM or a
-  // timer; preserve router state, return values and clean up on unmount.
+  // SDK 1.1.0 exposes no profile subscription (runtime ee8dd6c886): the
+  // switcher only rewrites ?profile=, so read it on a short interval instead of
+  // patching the host's history API.
   function useProfile() {
     const [profile, setProfile] = R.useState(scope);
     R.useEffect(() => {
-      const update = () => setProfile(scope());
-      const restorers = ["pushState", "replaceState"].map(name => {
-        const original = window.history[name];
-        function wrapped() {
-          const value = original.apply(this, arguments);
-          update();
-          return value;
-        }
-        window.history[name] = wrapped;
-        return () => { if (window.history[name] === wrapped) window.history[name] = original; };
-      });
-      window.addEventListener("popstate", update);
-      update();
-      return () => { restorers.forEach(restore => restore()); window.removeEventListener("popstate", update); };
+      const id = setInterval(() => setProfile(scope()), 500);
+      return () => clearInterval(id);
     }, []);
     return profile;
   }

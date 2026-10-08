@@ -1,13 +1,12 @@
-"""Owners snapshot API. Native storage adapter, no workflow writes or core imports.
+"""Owners snapshot API: read-only view of the charter, bot status and handoffs on the native kanban.
 
-Storage contracts inspected at hermes-agent ee8dd6c886. The host provides auth;
-explicit profile selection is resolved here because the public SDK does not expose
-Python's context-local home resolver. No request may supply a filesystem path.
+Storage contracts checked against hermes-agent ee8dd6c886. The host provides auth;
+no request may supply a filesystem path.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
-import math
 import os
 import re
 import sqlite3
@@ -26,12 +25,14 @@ PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 SCAN_LIMIT = 1000
 DETAIL_LIMIT = 50
 STATE_TTL = 120
-MAX_FILE_BYTES = 1024 * 1024
+
+# Charter lookup is the plugin's own, so the dashboard never reads a different fleet.yaml than the bots.
+_spec = importlib.util.spec_from_file_location("_owners_plugin", Path(__file__).parent.parent / "__init__.py")
+_plugin = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_plugin)
 
 
 def _read(path: Path, *, yaml=False):
-    if path.stat().st_size > MAX_FILE_BYTES:
-        raise ValueError("source too large")
     text = path.read_text(encoding="utf-8")
     value = YAML(typ="safe").load(text) if yaml else json.loads(text)
     if not isinstance(value, dict):
@@ -41,8 +42,6 @@ def _read(path: Path, *, yaml=False):
 
 def _root_home():
     home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes").expanduser().resolve()
-    # A custom home remains isolated even when stored beneath ~/.hermes (e.g.
-    # local fixtures). Only the direct profiles/<id> layout shares its parent.
     root = home.parent.parent if home.parent.name == "profiles" else home
     return root, home
 
@@ -60,24 +59,17 @@ def _timestamp(value):
     try:
         if isinstance(value, str):
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                return None
-            number = dt.timestamp()
-        elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            number = float(value)
-        else:
-            return None
-        return number if math.isfinite(number) else None
+            return dt.timestamp() if dt.tzinfo else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
     except (ValueError, OverflowError):
-        return None
+        pass
+    return None
 
 
 def _iso(value):
     stamp = _timestamp(value)
-    try:
-        return datetime.fromtimestamp(stamp, timezone.utc).isoformat() if stamp is not None else None
-    except (ValueError, OverflowError, OSError):
-        return None
+    return datetime.fromtimestamp(stamp, timezone.utc).isoformat() if stamp is not None else None
 
 
 def _strings(value):
@@ -85,65 +77,24 @@ def _strings(value):
         return []
     if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
         raise ValueError("expected text list")
-    return [v[:500] for v in value[:50]]
-
-
-def _expand_setting(value: str) -> str:
-    """Match native ${VAR}/${env:VAR} expansion; preserve unresolved refs.
-
-    Only the configured setting is expanded, never charter content. No private
-    Hermes config/secret resolver is imported by this public dashboard adapter.
-    """
-    def replace(match: re.Match[str]) -> str:
-        ref = match[1].strip()
-        if ref.startswith("env:"):
-            name = ref[4:].strip()
-        elif re.match(r"^[a-z][a-z0-9_-]*:", ref):
-            return match[0]
-        else:
-            name = ref
-        return os.environ.get(name, match[0]) if name else match[0]
-
-    return re.sub(r"\${([^}]+)}", replace, value)
+    return value
 
 
 def _charter(home, root):
-    """Match Owners get_fleet_path at ee8dd6c886's PluginContext settings API.
-
-    Profile home selects settings, not default charter candidates. Relative
-    configured paths use this process's CWD, just as the native plugin does.
-    """
-    configured = None
     config = home / "config.yaml"
-    if config.exists():
-        cfg = _read(config, yaml=True)
-        plugins = cfg.get("plugins", {})
-        entries = plugins.get("entries", {})
-        owner = entries.get("owners", {})
-        settings = owner.get("settings", {})
-        legacy = owner.get("config", {})
-        configured = (settings["fleet_path"] if isinstance(settings, dict) and "fleet_path" in settings
-                      else legacy.get("fleet_path") if isinstance(legacy, dict) else None)
-        if configured is not None and not isinstance(configured, str):
-            raise ValueError("invalid fleet_path setting")
-        if isinstance(configured, str):
-            configured = _expand_setting(configured)
-    if configured:
-        path = Path(configured).expanduser()
-    else:
-        candidates = [Path.home() / ".hermes" / "fleet.yaml", Path(__file__).parent.parent / "fleet.yaml"]
-        path = next((p for p in candidates if p.exists()), candidates[0])
+    cfg = _read(config, yaml=True) if config.exists() else {}
+    entry = ((cfg.get("plugins") or {}).get("entries") or {}).get("owners") or {}
+    path = _plugin.get_fleet_path((entry.get("settings") or {}).get("fleet_path"))
+    if path is None:
+        raise FileNotFoundError("no fleet charter")
     fleet = _read(path, yaml=True)
-    company = fleet.get("company")
-    if company is not None and not isinstance(company, str):
-        raise ValueError("invalid company")
-    departments = fleet.get("departments", {})
-    if not isinstance(departments, dict) or len(departments) > 100:
-        raise ValueError("invalid departments")
+    departments = fleet.get("departments") or {}
+    if not isinstance(departments, dict):
+        raise TypeError("invalid departments")
     areas, routes, profiles = [], [], set()
     for name, dept in departments.items():
-        if not isinstance(name, str) or not name or len(name) > 100 or not isinstance(dept, dict):
-            raise ValueError("invalid department")
+        if not isinstance(dept, dict):
+            raise TypeError("invalid department")
         profile = dept.get("profile")
         if profile is not None:
             _profile_home(root, profile)
@@ -154,45 +105,50 @@ def _charter(home, root):
                       "does_not_own": _strings(dept.get("does_not_own")),
                       "profiles": [profile] if profile else []})
         targets = dept.get("escalates_to", [])
-        targets = [targets] if isinstance(targets, str) else targets
-        for target in _strings(targets):
+        for target in _strings([targets] if isinstance(targets, str) else targets):
             if target not in departments or target == name:
                 raise ValueError("invalid route target")
-            route = {"from": name, "to": target}
-            if route not in routes:
-                routes.append(route)
-    return company, areas, routes, _iso(path.stat().st_mtime)
+            if {"from": name, "to": target} not in routes:
+                routes.append({"from": name, "to": target})
+    return fleet.get("company"), areas, routes, _iso(path.stat().st_mtime)
 
 
-def _bot(root, profile, now):
-    bot = {"name": profile, "status": "unknown", "availability": "missing", "updated_at": None}
+def _fresh_state(path, now):
+    """A gateway_state.json updated within STATE_TTL, else None. Stale is unknown, not offline."""
     try:
-        path = _profile_home(root, profile) / "gateway_state.json"
-        if not path.resolve().is_relative_to(root):
-            raise ValueError("unsafe state path")
         record = _read(path)
-        stamp = _timestamp(record.get("updated_at"))
-        bot["updated_at"] = _iso(stamp)
-        if stamp is None or stamp > now + 30:
-            raise ValueError("invalid state timestamp")
-        if now - stamp > STATE_TTL:
-            bot["availability"] = "stale"
-            return bot
-        state = record.get("gateway_state")
-        if state not in {"running", "starting", "stopping", "stopped", "failed", "startup_failed", "degraded", "draining"}:
-            raise ValueError("unknown gateway state")
-        active = record.get("active_agents")
-        bot["availability"] = "fresh"
-        bot["status"] = "busy" if state == "running" and isinstance(active, int) and active > 0 else state
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError, TypeError, HTTPException):
-        bot["availability"] = "malformed"
+    except (OSError, ValueError, TypeError):
+        return None
+    stamp = _timestamp(record.get("updated_at"))
+    return record if stamp is not None and 0 <= now - stamp <= STATE_TTL else None
+
+
+def _bot(root, profile, now, shared):
+    # A multiplexed gateway in the root home serves several profiles and keys their
+    # platforms as "<profile>:<platform>" (unprefixed for default). Per-profile state
+    # files stop being written once it takes over, so they are only read as a fallback.
+    if shared and profile in (shared.get("served_profiles") or []):
+        prefix = "" if profile == "default" else profile + ":"
+        platforms = [v for k, v in (shared.get("platforms") or {}).items()
+                     if isinstance(v, dict) and (k.startswith(prefix) if prefix else ":" not in k)]
+        status = shared.get("gateway_state") or "unknown"
+        if status == "running" and any(p.get("state") != "connected" for p in platforms):
+            status = "degraded"
+        return {"name": profile, "status": status, "availability": "fresh",
+                "updated_at": _iso(shared.get("updated_at"))}
+    bot = {"name": profile, "status": "unknown", "availability": "missing", "updated_at": None}
+    path = _profile_home(root, profile) / "gateway_state.json"
+    if path.exists():
+        record = _fresh_state(path, now)
+        bot["availability"] = "fresh" if record else "stale"
+        if record:
+            bot["status"] = record.get("gateway_state") or "unknown"
+            bot["updated_at"] = _iso(record.get("updated_at"))
     return bot
 
 
 def _pair(body, area_ids):
-    # Read only Owners provenance lines, never return the customer body or title.
+    # Read only the Owners provenance lines, never return the customer body or title.
     found = []
     for label in ("From", "To"):
         match = re.search(r"^\*\*" + label + r" Department:\*\* ([^\n]+)", body or "", re.MULTILINE)
@@ -205,25 +161,41 @@ def _pair(body, area_ids):
     return tuple(found) if found[0] != found[1] else None
 
 
+def _handback(conn, task_id, pair, profile_area):
+    """Observed when a native event moved the card from the receiving area back to the origin."""
+    events = conn.execute("SELECT kind, payload, created_at FROM task_events "
+                          "WHERE task_id=? AND kind IN ('assigned', 'review_requested') ORDER BY id DESC",
+                          (task_id,)).fetchall()
+    for event in events:
+        try:
+            payload = json.loads(event["payload"] or "{}")
+        except ValueError:
+            return "unknown", None
+        if not isinstance(payload, dict):
+            return "unknown", None
+        if event["kind"] == "assigned":
+            previous, target = payload.get("from"), payload.get("assignee")
+        else:
+            previous, target = payload.get("implementer"), payload.get("reviewer")
+        if profile_area.get(previous) == pair[1] and profile_area.get(target) == pair[0]:
+            return "observed", _iso(event["created_at"])
+    return "not_observed", None
+
+
 def _kanban(root, areas):
     source = {"availability": "missing", "task_count": None, "scanned_count": None,
               "truncated": False, "updated_at": None, "history_available": False}
     path = Path(os.environ.get("HERMES_KANBAN_DB") or
                 Path(os.environ.get("HERMES_KANBAN_HOME") or root) / "kanban.db").expanduser()
-    tasks, aggregates = [], {}
     if not path.exists():
-        return source, tasks, []
-    if path.is_symlink():
-        source["availability"] = "malformed"
-        return source, tasks, []
+        return source, [], []
+    tasks, aggregates = [], {}
     try:
-        # mode=ro cannot create a DB; query_only also denies accidental future writes.
+        # mode=ro cannot create or write the database.
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as conn:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA query_only = ON")
-            conn.execute("BEGIN")
             source["task_count"] = conn.execute("SELECT count(*) FROM tasks").fetchone()[0]
-            rows = conn.execute("SELECT id, substr(body, 1, 8192) AS body, assignee, status, created_at, completed_at "
+            rows = conn.execute("SELECT id, body, assignee, status, created_at, completed_at "
                                 "FROM tasks ORDER BY created_at DESC, id LIMIT ?", (SCAN_LIMIT,)).fetchall()
             source["scanned_count"] = len(rows)
             source["truncated"] = source["task_count"] > len(rows)
@@ -235,32 +207,13 @@ def _kanban(root, areas):
                 pair = _pair(row["body"], area_ids)
                 if not pair:
                     continue
-                handback = "not_observed" if source["history_available"] else "unknown"
-                returned_at = None
-                if source["history_available"]:
-                    events = conn.execute("SELECT kind, payload, created_at FROM task_events "
-                                          "WHERE task_id=? AND kind IN ('assigned', 'review_requested') "
-                                          "ORDER BY id DESC LIMIT 101", (row["id"],)).fetchall()
-                    if len(events) > 100:
-                        handback = "unknown"
-                    for event in events[:100]:
-                        try:
-                            payload = json.loads(event["payload"] or "{}")
-                            if not isinstance(payload, dict):
-                                raise TypeError("invalid event")
-                            previous = payload.get("from") if event["kind"] == "assigned" else payload.get("implementer")
-                            target = payload.get("assignee") if event["kind"] == "assigned" else payload.get("reviewer")
-                            if profile_area.get(previous) == pair[1] and profile_area.get(target) == pair[0]:
-                                handback, returned_at = "observed", _iso(event["created_at"])
-                                break
-                        except (ValueError, TypeError):
-                            handback = "unknown"
-                item = {"id": row["id"], "from": pair[0], "to": pair[1],
-                        "current_area": profile_area.get(row["assignee"]),
-                        "status": row["status"], "created_at": _iso(row["created_at"]),
-                        "completed_at": _iso(row["completed_at"]),
-                        "handback": handback, "returned_at": returned_at}
-                tasks.append(item)
+                handback, returned_at = (_handback(conn, row["id"], pair, profile_area)
+                                         if source["history_available"] else ("unknown", None))
+                tasks.append({"id": row["id"], "from": pair[0], "to": pair[1],
+                              "current_area": profile_area.get(row["assignee"]),
+                              "status": row["status"], "created_at": _iso(row["created_at"]),
+                              "completed_at": _iso(row["completed_at"]),
+                              "handback": handback, "returned_at": returned_at})
                 agg = aggregates.setdefault(pair, {"from": pair[0], "to": pair[1], "total": 0,
                                                    "returned": 0, "handback_unknown": 0, "statuses": Counter()})
                 agg["total"] += 1
@@ -270,7 +223,7 @@ def _kanban(root, areas):
         source.update(availability="available", updated_at=_iso(path.stat().st_mtime),
                       handoff_count=len(tasks), details_truncated=len(tasks) > DETAIL_LIMIT)
         return source, tasks[:DETAIL_LIMIT], list(aggregates.values())
-    except (OSError, sqlite3.Error, ValueError, TypeError):
+    except (OSError, sqlite3.Error):
         source.update(availability="malformed", task_count=None, scanned_count=None)
         return source, [], []
 
@@ -304,11 +257,10 @@ def build_snapshot(profile: str | None = None, *, now: float | None = None):
         result["warnings"].append("Observations cover the latest 1,000 native cards, not the entire board.")
     if source.get("details_truncated"):
         result["warnings"].append("Task details are limited to the latest 50 observed handoff cards.")
-    if not source["history_available"] and source["availability"] == "available":
-        result["warnings"].append("Native event history unavailable; handback evidence is unknown.")
+    shared = _fresh_state(root / "gateway_state.json", now)
     for area in areas:
-        area["profiles"] = [_bot(root, p, now) for p in area["profiles"]]
-        if any(b["availability"] != "fresh" for b in area["profiles"]) or not area["profiles"]:
+        area["profiles"] = [_bot(root, p, now, shared) for p in area["profiles"]]
+        if not area["profiles"] or any(b["availability"] != "fresh" for b in area["profiles"]):
             result["warnings"].append(f"{area['id']}: bot state is unknown or not fresh; no offline claim is made.")
     result["areas"] = areas
     return result
