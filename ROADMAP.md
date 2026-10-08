@@ -22,8 +22,9 @@ The flow: support hands a ticket to tech; tech's agent diagnoses right away with
 
 - Cap handoff chains and catch bot-to-bot loops, now that tasks can be born `ready`.
 - Full charter of a real fleet: what each department owns, does not own, and where it escalates.
-- Adoption counting rule, fixed before the dashboard: a human message is `role='user'` with `sessions.source` outside `cli, cron, kanban, acp, api_server, subagent, tool, recovered`, with an option to exclude admins.
-- Dashboard: live org chart and adoption per department, read-only over each profile's `state.db` and the shared `kanban.db`. It proves the structure serves people; it is not the product.
+- Dashboard tab in the web dashboard, read-only, with its backend shared with the Desktop. It proves the structure serves people; it is not the product.
+  1. Org chart from `fleet.yaml`, bot status and handoffs per department pair ([#18](https://github.com/antonio-leblanc/hermes-owners/issues/18)).
+  2. Adoption and cost per department, with the counting rule and an option to hide admins ([#19](https://github.com/antonio-leblanc/hermes-owners/issues/19)).
 
 ## Later
 
