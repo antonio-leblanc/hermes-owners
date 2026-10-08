@@ -74,6 +74,32 @@ def test_missing_or_invalid_charter_never_uses_example(home):
     assert result["charter"]["availability"] == "missing"
 
 
+@pytest.mark.parametrize("field", ["owns", "does_not_own"])
+def test_yaml_mapping_responsibility_reports_field_not_value(home, field):
+    (home / "fleet.yaml").write_text(
+        "company: Acme Solar\ndepartments:\n"
+        f"  support:\n    profile: support-agent\n    {field}:\n"
+        "      - Private example: Do not disclose this value\n"
+    )
+    result = api.build_snapshot(now=NOW)
+    assert result["areas"] == []
+    assert result["charter"]["availability"] == "malformed"
+    warning = result["warnings"][0]
+    assert f"departments.support.{field}" in warning
+    assert "Quote entries" in warning
+    assert "Private example" not in warning
+    assert "Do not disclose" not in warning
+
+    (home / "fleet.yaml").write_text(
+        "company: Acme Solar\ndepartments:\n"
+        f"  support:\n    profile: support-agent\n    {field}:\n"
+        '      - "Private example: Do not disclose this value"\n'
+    )
+    repaired = api.build_snapshot(now=NOW)
+    assert repaired["charter"]["availability"] == "available"
+    assert repaired["areas"][0][field] == ["Private example: Do not disclose this value"]
+
+
 def test_profile_selection_cannot_escape_root(home):
     with pytest.raises(api.HTTPException) as exc:
         api.build_snapshot("../outside")

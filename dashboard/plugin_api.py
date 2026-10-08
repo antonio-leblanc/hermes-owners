@@ -72,6 +72,20 @@ def _iso(value):
     return datetime.fromtimestamp(stamp, timezone.utc).isoformat() if stamp is not None else None
 
 
+class CharterFieldError(ValueError):
+    """Actionable field location without exposing invalid charter values."""
+
+
+def _responsibilities(value, area, field):
+    try:
+        return _strings(value)
+    except ValueError as exc:
+        raise CharterFieldError(
+            f"departments.{area}.{field} must be a list of text strings. "
+            "Quote entries containing ': ' so YAML does not interpret them as mappings."
+        ) from exc
+
+
 def _strings(value):
     if value is None:
         return []
@@ -101,8 +115,8 @@ def _charter(home, root):
             if profile in profiles:
                 raise ValueError("ambiguous profile ownership")
             profiles.add(profile)
-        areas.append({"id": name, "owns": _strings(dept.get("owns")),
-                      "does_not_own": _strings(dept.get("does_not_own")),
+        areas.append({"id": name, "owns": _responsibilities(dept.get("owns"), name, "owns"),
+                      "does_not_own": _responsibilities(dept.get("does_not_own"), name, "does_not_own"),
                       "profiles": [profile] if profile else []})
         targets = dept.get("escalates_to", [])
         for target in _strings([targets] if isinstance(targets, str) else targets):
@@ -244,6 +258,10 @@ def build_snapshot(profile: str | None = None, *, now: float | None = None):
         result["charter"] = {"availability": "available", "updated_at": updated}
     except FileNotFoundError:
         result["warnings"].append("No fleet charter found. No example data is substituted.")
+        areas = []
+    except CharterFieldError as exc:
+        result["charter"]["availability"] = "malformed"
+        result["warnings"].append(str(exc))
         areas = []
     except (OSError, ValueError, TypeError, AttributeError, HTTPException, YAMLError):
         result["charter"]["availability"] = "malformed"
