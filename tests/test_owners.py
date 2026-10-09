@@ -106,6 +106,24 @@ def test_handoff_hands_back_the_same_card_to_origin(monkeypatch):
     assert "do not call `kanban_complete`" in hand_back
 
 
+def test_delegation_is_completed_by_the_receiver(monkeypatch):
+    fleet = {"departments": {
+        "support": {"profile": "suporte"},
+        "geo": {"profile": "geouploader", "handoff": "delegate"},
+    }}
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
+    ctx = MagicMock()
+    ctx.profile_name = "suporte"
+    ctx.dispatch_tool.return_value = json.dumps({"task_id": "task-101", "status": "blocked"})
+    res = json.loads(wf.make_handoff_handler(ctx)({"to_department": "geo", "title": "Upload base", "context": "x"}))
+
+    # No hand back: the receiver completes the card and the origin learns it natively.
+    body = ctx.dispatch_tool.call_args[0][1]["body"]
+    assert "### Hand back" not in body
+    assert "call `kanban_complete`" in body
+    assert res["mode"] == "delegate"
+
+
 def test_handoff_task_appends_target_intake(monkeypatch):
     fleet = {
         "company": "Acme Solar",

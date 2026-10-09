@@ -31,6 +31,7 @@ departments:
 
   operations:
     profile: ops
+    handoff: delegate   # completes the card itself; default is stage (hand back to origin)
     owns:
       - Contracts and billing
       - Priorities that cross departments

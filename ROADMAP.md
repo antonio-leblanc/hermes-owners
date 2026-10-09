@@ -15,7 +15,7 @@ Any company running Hermes installs the plugin, writes a charter, and its profil
 The flow: support hands a ticket to tech; tech's agent diagnoses right away without touching code, opens an issue and blocks the card; a human fixes it and closes the issue; tech hands the same card back to support, whose agent drafts the reply and a person sends it and completes the card.
 
 - **First real escalation, end to end,** on one card, opened by a person on the support team.
-- **One-shot delegation** ([#16](https://github.com/antonio-leblanc/hermes-owners/issues/16)): the receiver completes the card and native notifications tell the origin, with no hand back. Comes with its first real case.
+- **First one-shot delegation in production** ([#16](https://github.com/antonio-leblanc/hermes-owners/issues/16)): a department set to `handoff: delegate` completes the card and native notifications tell the origin, with no hand back.
 - **Ownership by repository, not only by topic.** A charter that says fixes belong to tech sent a merge on support's own repository to tech. The charter has to name which repositories each department owns.
 
 ## Next

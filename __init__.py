@@ -183,14 +183,23 @@ def make_handoff_handler(ctx):
                 if intake_text.strip():
                     body_lines.append(f"\n### Department Intake ({canonical_target_dept})\n{intake_text.strip()}")
 
-        # Hand back the same card: request_review ends this stage and reassigns
-        # the card to the origin, so one request stays one card until it is done.
-        body_lines.append(
-            f"\n### Hand back\n"
-            f"This card is one stage of a request from {my_dept_name}. When your stage is done, "
-            f"do not call `kanban_complete`: call `kanban_request_review` with reviewer `{my_profile}` "
-            f"and a summary of what you did. Only {my_dept_name} completes the card."
-        )
+        # "delegate": the receiver completes the card and the native subscription
+        # tells the origin. Anything else is a stage: request_review ends it and
+        # reassigns the card to the origin, so one request stays one card.
+        mode = "delegate" if target_info.get("handoff") == "delegate" else "stage"
+        if mode == "delegate":
+            body_lines.append(
+                f"\n### Completion\n"
+                f"This card is a delegation from {my_dept_name}. When the work is done, call "
+                f"`kanban_complete` with a summary of what you did; {my_dept_name} is notified natively."
+            )
+        else:
+            body_lines.append(
+                f"\n### Hand back\n"
+                f"This card is one stage of a request from {my_dept_name}. When your stage is done, "
+                f"do not call `kanban_complete`: call `kanban_request_review` with reviewer `{my_profile}` "
+                f"and a summary of what you did. Only {my_dept_name} completes the card."
+            )
 
         body = "\n".join(body_lines)
 
@@ -251,6 +260,7 @@ def make_handoff_handler(ctx):
                 "to_department": canonical_target_dept,
                 "assignee": target_profile,
                 "status": real_status,
+                "mode": mode,
                 "subscribed": subscribed,
                 "message": message,
             })
