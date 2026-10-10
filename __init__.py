@@ -183,14 +183,24 @@ def make_handoff_handler(ctx):
                 if intake_text.strip():
                     body_lines.append(f"\n### Department Intake ({canonical_target_dept})\n{intake_text.strip()}")
 
-        # Hand back the same card: request_review ends this stage and reassigns
-        # the card to the origin, so one request stays one card until it is done.
-        body_lines.append(
-            f"\n### Hand back\n"
-            f"This card is one stage of a request from {my_dept_name}. When your stage is done, "
-            f"do not call `kanban_complete`: call `kanban_request_review` with reviewer `{my_profile}` "
-            f"and a summary of what you did. Only {my_dept_name} completes the card."
-        )
+        # "delegate": the receiver completes the card and the native subscription
+        # tells the origin. Anything else is a stage: request_review ends it and
+        # reassigns the card to the origin, so one request stays one card.
+        mode = "delegate" if target_info.get("handoff") == "delegate" else "stage"
+        if mode == "delegate":
+            body_lines.append(
+                f"\n### Completion\n"
+                f"This card is a delegation from {my_dept_name}. When the work is done, call "
+                f"`kanban_complete` with a summary of what you did. Native notifications require "
+                f"a subscription; do not assume {my_dept_name} will be notified."
+            )
+        else:
+            body_lines.append(
+                f"\n### Hand back\n"
+                f"This card is one stage of a request from {my_dept_name}. When your stage is done, "
+                f"do not call `kanban_complete`: call `kanban_request_review` with reviewer `{my_profile}` "
+                f"and a summary of what you did. Only {my_dept_name} completes the card."
+            )
 
         body = "\n".join(body_lines)
 
@@ -245,13 +255,23 @@ def make_handoff_handler(ctx):
                     f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
                 )
 
+            warning = None
+            if mode == "delegate" and not subscribed:
+                warning = (
+                    "No native notification subscription confirmed. Arrange an explicit native "
+                    "Kanban subscription or monitor the card; completion may not notify the origin."
+                )
+                message += f" Warning: {warning}"
+
             return json.dumps({
                 "ok": True,
                 "task_id": task_id,
                 "to_department": canonical_target_dept,
                 "assignee": target_profile,
                 "status": real_status,
+                "mode": mode,
                 "subscribed": subscribed,
+                "warning": warning,
                 "message": message,
             })
         except Exception as e:
