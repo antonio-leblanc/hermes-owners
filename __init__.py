@@ -191,7 +191,8 @@ def make_handoff_handler(ctx):
             body_lines.append(
                 f"\n### Completion\n"
                 f"This card is a delegation from {my_dept_name}. When the work is done, call "
-                f"`kanban_complete` with a summary of what you did; {my_dept_name} is notified natively."
+                f"`kanban_complete` with a summary of what you did. Native notifications require "
+                f"a subscription; do not assume {my_dept_name} will be notified."
             )
         else:
             body_lines.append(
@@ -254,6 +255,14 @@ def make_handoff_handler(ctx):
                     f"department '{canonical_target_dept}' (assignee: '{target_profile}') with status '{real_status}'."
                 )
 
+            warning = None
+            if mode == "delegate" and not subscribed:
+                warning = (
+                    "No native notification subscription confirmed. Arrange an explicit native "
+                    "Kanban subscription or monitor the card; completion may not notify the origin."
+                )
+                message += f" Warning: {warning}"
+
             return json.dumps({
                 "ok": True,
                 "task_id": task_id,
@@ -262,6 +271,7 @@ def make_handoff_handler(ctx):
                 "status": real_status,
                 "mode": mode,
                 "subscribed": subscribed,
+                "warning": warning,
                 "message": message,
             })
         except Exception as e:

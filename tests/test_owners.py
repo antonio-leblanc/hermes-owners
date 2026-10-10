@@ -124,6 +124,29 @@ def test_delegation_is_completed_by_the_receiver(monkeypatch):
     assert res["mode"] == "delegate"
 
 
+def test_delegation_warns_only_when_subscription_is_unconfirmed(monkeypatch):
+    fleet = {"departments": {
+        "support": {"profile": "support-test"},
+        "geo": {"profile": "geo-test", "handoff": "delegate"},
+    }}
+    monkeypatch.setattr(wf, "load_fleet", lambda *_: fleet)
+    ctx = MagicMock()
+    ctx.profile_name = "support-test"
+    handler = wf.make_handoff_handler(ctx)
+    for subscribed in (False, True):
+        ctx.dispatch_tool.return_value = json.dumps({
+            "task_id": "task-101", "status": "ready", "subscribed": subscribed,
+        })
+        res = json.loads(handler({"to_department": "geo", "title": "Validate file", "context": "x"}))
+        assert res["ok"] is True
+        assert res["subscribed"] is subscribed
+        assert bool(res["warning"]) is (not subscribed)
+        assert ("Warning:" in res["message"]) is (not subscribed)
+        body = ctx.dispatch_tool.call_args[0][1]["body"]
+        assert "is notified natively" not in body
+        assert "do not assume" in body
+
+
 def test_handoff_task_appends_target_intake(monkeypatch):
     fleet = {
         "company": "Acme Solar",

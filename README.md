@@ -22,6 +22,8 @@ Each team talks to its own agent. When a problem, or a step of it, belongs to an
 
 A read-only dashboard tab shows the areas and the handoffs between them. Later: per-department adoption by real people, as proof that the structure serves them.
 
+Native notifications require a subscription. A delegation returning `subscribed: false` includes a warning: arrange an explicit native Kanban subscription or monitor the card. CLI/cron calls, disabled auto-subscription or subscription failures may leave no notification target; `subscribed: true` confirms registration, not delivery.
+
 See [`fleet.example.yaml`](./fleet.example.yaml) for the charter format.
 
 ## Areas dashboard
